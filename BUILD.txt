@@ -1,0 +1,283 @@
+HyAuth-Agent 构建产物信息
+=========================================================
+
+产物      : target/HyAuth-Agent-1.0.0.jar
+大小      : 9,017,173 字节 (8.60 MB)
+SHA256    : 0ac65b56eb061bdd22961f9b17b321e66a5401da61e7293e14cfb425b08f7415
+构建时间  : 2026-09-27 22:11 (+08:00)
+工具链    : JDK 25.0.1 (Microsoft) + Apache Maven 3.9.9, --release 8, shade 打包
+校验命令  : sha256sum HyAuth-Agent-1.0.0.jar
+
+★ 本版（v1.0.2）：外置玩家"自己看不到自己发的消息 + 红字聊天验证错误" —— 已修
+---------------------------------------------------------
+症状（用户真机）：外置（LittleSkin）玩家发消息后**自己聊天框里不显示**，并弹红字
+「聊天验证错误」；别人都看得到；离线名单玩家反而正常。
+
+根因（26.3 原版源码 + 用户现象，两侧都核对过）：
+  上一版（v1.0.1）为了让正版客户端不再因为"记账不一致"被踢，把外置玩家的消息**整条**
+  换成了"未签名"再广播。副作用是**作者自己那一份也变成了未签名**：
+
+    客户端 PlayerInfo 对每个玩家的校验器，取决于它能不能验证那个人的聊天会话密钥
+      · 正版客户端验不了皮肤站签发的密钥 → 对该玩家用 ACCEPT_UNSIGNED → 未签名消息照常显示
+      · 外置玩家自己的客户端（authlib-injector 之类）**能**用皮肤站公钥验证自己那把密钥
+        → 对自己用"链式校验器" → 未签名消息验不过 →
+        ChatListener.handleChatMessageError → 红字 chat.validation_error + 消息不显示
+
+  于是就成了"自己看不到、别人都看得到"。离线名单玩家没有会话密钥，客户端对他们用的是
+  ACCEPT_UNSIGNED（enforce-secure-profile=false 时），所以反而正常。
+
+修法：**按接收者分流**（不再是"整条消息一刀切"）。切点从
+PlayerList#broadcastChatMessage（对全体一次性改写）换成
+ServerGamePacketListenerImpl#sendPlayerChatMessage(PlayerChatMessage, ChatType.Bound)
+—— 原版**每个接收者各调用一次**的那个方法：
+
+    发给作者本人 → 原样放行（原版「带签名」消息）
+                   · 客户端用自己的公钥验签通过 ⇒ 自己看得到自己发的话
+                   · 服务端"已发送签名"账本与客户端记录一致 ⇒ 不会被踢
+    发给其他人   → 改用原版自带的「伪装聊天」sendDisguisedChatMessage(Component, ChatType.Bound)
+                   · 客户端直接上屏、完全不走签名校验 ⇒ 任何客户端都不会弹「聊天验证错误」
+                     （连能验证皮肤站密钥的其它外置客户端也一样）
+                   · 服务端不再记账 ⇒ 与客户端记录天然一致 ⇒ 不会被踢
+
+  这不是自创管线：原版 OutgoingChatMessage.create() 对"系统来源的玩家消息"
+  （message.isSystem()）走的就是 Disguised 这一支；显示效果与原版聊天一致
+  （服务端只送内容，客户端照旧用 ChatType.Bound 拼出 <玩家名> 内容）。
+
+附带修正：
+  · 外置玩家之间的聊天也恢复正常（以前另一个外置玩家同样验不过 → 看不到 + 红字）；
+  · unsigned_all_chat=true 不再有 v1.0.1 的副作用（正版↔正版"聊天验证错误"已不存在），
+    作者本人仍保留原版签名消息；
+  · 发送方法声明在 ServerGamePacketListenerImpl 还是它的父类
+    ServerCommonPacketListenerImpl 都能命中（两个类一起匹配，没声明的那边是空操作）；
+  · 连接对象的 player / server 字段无论 public 还是 protected/private、声明在子类还是父类，
+    都能反射读到（沿类层次一路查 declared + setAccessible；服务端类在 Bundler 的
+    URLClassLoader 里，未命名模块，允许放开访问）；
+  · 发送者按 UUID 在在线玩家表里查名字判定"是不是外置账号"（getPlayer(UUID) 拿不到时
+    退化为遍历 getPlayers()）；查不到就按原版处理，绝不误伤正版玩家（fail-safe）。
+
+新增/变更文件：
+  新增  src/main/java/com/hyauth/agent/ExternalChatAdvice.java
+  重写  src/main/java/com/hyauth/agent/util/ExternalChatBroadcast.java
+  删除  src/main/java/com/hyauth/agent/UnsignedChatAdvice.java（旧的一次性改写切面）
+  新增  verify/chat.ps1 + verify/chat/**（离线回归测试，11 项断言）
+
+验证记录（本机 JDK 25.0.1 + Byte Buddy 1.17.5）：
+  · verify\chat.ps1       11/11 断言通过（别人→伪装聊天、自己→原版签名消息、正版不动、
+                          开关可关、查不到发送者时 fail-safe、旧版取名字/无 getPlayer(UUID)
+                          的退化路线、发送方法声明在父类也能命中）
+  · verify\loaderiso.ps1  全部通过（无回归）
+  · verify\verify.ps1     mock-modern 22/22、mock-legacy 22/22、real-modern 20/20、
+                          real-legacy 20/20、real-10 20/20、配置热重载 全部通过
+
+升级方式：
+  替换服务端目录里的 HyAuth-Agent-1.0.0.jar 后重启服务端即可（配置项不用改）。
+  外置账号的聊天从此不再受 server.properties 的 enforce-secure-profile 影响；
+  离线名单玩家的普通聊天仍需要 enforce-secure-profile=false（他们发出去的就是未签名包）。
+
+配置项一览
+---------------------------------------------------------
+  relax_chat_keys         true    聊天密钥三级桥接（Mojang → 皮肤站公钥 → 策略）
+  chat_key_strict         false   三级都验不过时：false 放行 / true 拒绝
+  bypass_signed_commands  true    离线名单玩家的指令按未签名执行
+  offline_chat_exempt     true    离线名单玩家在服务端豁免安全档案校验
+  unsigned_external_chat  true    外置账号聊天逐接收者分流（作者签名 / 他人伪装聊天）
+  unsigned_all_chat       false   连正版玩家的消息也走伪装聊天（作者本人仍保留签名）
+  server.properties       —       外置账号聊天不再受 enforce-secure-profile 影响；
+                                  离线名单玩家的普通聊天仍需 false
+
+=========================================================
+以下为历史版本记录
+=========================================================
+
+（v1.0.1）本版变化：外置账号的「皮肤」诊断日志
+---------------------------------------------------------
+LittleSkin 玩家鉴权成功的日志现在会带上资料属性（皮肤）摘要：
+
+    [HyAuth] 玩家 SUNxiaohaohao 通过 LittleSkin 鉴权成功！资料属性: 皮肤 https://…（签名有）
+    或
+    [HyAuth] 玩家 SUNxiaohaohao 通过 LittleSkin 鉴权成功！资料属性: 没有 textures 属性（客户端会显示默认皮肤）
+
+目的：把"皮肤不显示"这件事一刀切开 ——
+  日志里有皮肤链接 → 服务端已拿到并下发了皮肤数据，问题在客户端/账号侧
+                       （皮肤站没上传皮肤 / 客户端缓存 / 该玩家网络打不开那个链接）
+  日志里没有该属性   → 皮肤站没返回皮肤，不是 Agent 的问题
+
+实现：YggdrasilAuthUtil.describeTextures()（base64 解码 + 取出 url + 报告是否带签名），
+全程 try/catch，任何异常都不会影响登录。
+另外确认：属性写入 GameProfile 时用的是 new Property(name, value, signature)，
+签名是一起传下去的（客户端若校验属性签名也能通过）。
+
+★ 重要更正：外置/离线玩家聊天必须把 enforce-secure-profile 设为 false
+---------------------------------------------------------
+症状：名单玩家发消息后，**自己聊天框里不显示**，并弹红字「聊天验证错误」；
+      而服务端日志里明明有 <玩家> 内容 / [Not Secure] <玩家> 内容（说明服务端已广播）。
+
+根因在**客户端**（26.3 真实字节码，已逐层核对）：
+
+    // net.minecraft.client.multiplayer.PlayerInfo
+    private static SignedMessageValidator fallbackMessageValidator(boolean enforceSecureProfile) {
+        return enforceSecureProfile ? SignedMessageValidator.REJECT_ALL
+                                    : SignedMessageValidator.ACCEPT_UNSIGNED;
+    }
+
+    // net.minecraft.network.chat.SignedMessageValidator.REJECT_ALL
+    LOGGER.error("Received chat message from {}, but they have no chat session initialized and secure chat is enforced");
+    return null;      // → ClientPacketListener.handlePlayerChat 得到 null
+                      //   → ChatListener.handleChatMessageError → 红字 chat.validation_error + 丢弃
+
+    // 客户端 ClientPacketListener.handlePlayerChat 关键分支：
+    PlayerChatMessage m = info.getMessageValidator().updateAndValidate(message);
+    if (m != null) chatListener.handlePlayerChatMessage(...); else chatListener.handleChatMessageError(...);
+
+为什么外置/离线玩家必然命中 REJECT_ALL：
+  - 客户端只信任能用 Mojang 服务密钥验证的聊天会话；
+  - LittleSkin 账号的密钥由皮肤站签发（客户端验不了）→ 会话被清空；
+  - 离线名单玩家根本没有密钥 → 没有会话；
+  - 于是客户端用 fallbackMessageValidator(enforcesSecureChat)：
+      enforce-secure-profile=true  → REJECT_ALL      → 每条消息都丢
+      enforce-secure-profile=false → ACCEPT_UNSIGNED → 未签名消息正常显示
+
+关键点：**这是每个客户端各自按登录包里的 enforcesSecureChat 决定的，服务端切面管不到**。
+因此上一版"按玩家豁免 enforce-secure-profile"只能保证服务端收下并广播，
+解决不了客户端丢弃。必须改 server.properties 并重启：
+
+    enforce-secure-profile=false
+
+影响：正版玩家（Mojang 签名，客户端能验证）的聊天依旧显示为安全；
+      只有客户端验证不了签名的消息标注 [Not Secure]。
+
+本版改动：启动自检提示改写为上面这套完整说明（名单非空且开关为 true 时打印）。
+
+Agent 侧配套（仍然有用；没有上面的开关时它们只保证"服务端收下并广播"）
+---------------------------------------------------------
+  Decoder.unsigned 按玩家豁免  → 服务端不因缺少聊天密钥而丢弃离线玩家的消息
+  collectSignedArguments 回退  → /say、/me、/msg 等带实参指令按未签名执行
+  Services 三级桥接验签        → LittleSkin 密钥真实验签（皮肤站公钥 SHA1withRSA 已实测命中）
+
+验证记录
+---------------------------------------------------------
+1. verify\loaderiso.ps1：23/23 断言通过（含新增的"按玩家豁免"两条 + 类名 $ 匹配）
+2. 真机三方（用户服务器 19:52 那次）：
+   正版 _azxt_       → 桥接第 1 级「Mojang 官方验签通过」
+   LittleSkin        → 桥接第 2 级「皮肤站公钥验签通过（算法 SHA1withRSA）」
+   离线 azxt         → 服务端已广播「[Not Secure] <azxt> 6」
+   但客户端因 REJECT_ALL 未显示 → 本版把这条原因写进启动提示，并把配置改为必做项
+
+配置项一览
+---------------------------------------------------------
+  relax_chat_keys         true    聊天密钥三级桥接（Mojang → 皮肤站公钥 → 策略）
+  chat_key_strict         false   三级都验不过时：false 放行 / true 拒绝
+  bypass_signed_commands  true    离线名单玩家的指令按未签名执行
+  offline_chat_exempt     true    离线名单玩家在服务端豁免安全档案校验
+  server.properties       ★ enforce-secure-profile=false（外置/离线玩家聊天必需，需重启）
+
+升级方式
+---------------------------------------------------------
+1) 替换 HyAuth-Agent-1.0.0.jar
+2) server.properties：enforce-secure-profile=false
+3) 重启服务端
+
+★ 本版：离线名单玩家「完全不能聊天」改为按玩家豁免 —— 不需要关闭服务器的全局开关
+---------------------------------------------------------
+问题回顾（26.3 真实字节码）：
+
+    // ServerGamePacketListenerImpl 构造器：没有聊天公钥的玩家用这个解码器
+    this.signedMessageDecoder =
+        SignedMessageChain.Decoder.unsigned(uuid, () -> server.enforceSecureProfile());
+
+    // Decoder.unsigned 的实现
+    if (enforceSecureProfile.getAsBoolean())
+        throw new DecodeException(MISSING_PROFILE_KEY);      // 红字 + 消息被丢弃
+    else
+        return PlayerChatMessage.unsigned(uuid, content);    // 未签名消息，正常广播
+
+上一版的处理办法是"把 server.properties 的 enforce-secure-profile 改成 false"，
+那等于对**所有人**（含正版玩家）关掉聊天签名强制 —— 太粗暴。
+
+本版改为「切在 Decoder.unsigned(UUID, BooleanSupplier) 上，按玩家换掉那个判断」：
+
+    离线名单玩家（UUID 在名单内） → 判断恒为 false → 可以发未签名聊天（[Not Secure]）
+    其他玩家（正版 / LittleSkin） → 判断原样透传服务端设置 → 行为与原版完全一致
+
+于是 enforce-secure-profile 保持 true，正版玩家的强制校验不受影响，
+而离线名单玩家能正常聊天。新增配置 offline_chat_exempt（默认 true，可关）。
+
+日志（启动阶段 / 玩家连接时各一条）：
+
+    [HyAuth] 离线名单玩家 1 人：已按玩家豁免 enforce-secure-profile（他们可发未签名聊天，
+             正版玩家仍按服务端设置强制校验聊天签名）。
+    [HyAuth] 命中聊天解码器工厂: net.minecraft.network.chat.SignedMessageChain$Decoder，
+             挂载「离线玩家豁免安全档案」切面。
+    [HyAuth] 离线名单玩家已豁免 enforce-secure-profile：他们可以正常聊天（显示 [Not Secure]），
+             正版玩家仍按服务端设置强制校验。
+
+三类玩家的最终状态
+---------------------------------------------------------
+  正版玩家        Mojang 密钥 → 桥接第 1 级验签通过 → 聊天签名完整，服务器强制校验照旧
+  LittleSkin 账号  皮肤站密钥 → 桥接第 2/3 级处理 → 不再被踢，正常聊天
+  离线名单玩家     没有密钥   → 按玩家豁免 enforce-secure-profile + 指令走未签名分支 → 能聊天能发指令
+
+新增文件
+---------------------------------------------------------
+  src/main/java/com/hyauth/agent/OfflineDecoderAdvice.java         解码器工厂切面
+  src/main/java/com/hyauth/agent/util/OfflineChatExempt.java       按 UUID 豁免判定
+新增配置：offline_chat_exempt（默认 true）
+
+历史修复（保留记录）
+---------------------------------------------------------
+* Bundler 类加载器隔离导致切面静默失效 → AuthRejection + 切面签名改写 + 结果播报日志
+* 外置账号被聊天密钥校验秒踢 → ChatKeyPolicy + ChatKeyBridge 三级桥接验签
+* 桥接委托换了重载（正版被误判未通过）→ 按「调用方实际用的重载」委托
+* 离线玩家指令回退没生效 → 判定条件改为「在离线名单里」
+
+本版验证记录
+---------------------------------------------------------
+1. verify\loaderiso.ps1：23/23 断言通过，含本版新增三条：
+   - 「AgentMain 的类名匹配（含 $ 内部类）能命中聊天解码器工厂」
+   - 「离线名单玩家：解码器被豁免（可发未签名聊天），无需关闭全局开关」
+   - 「其他玩家：仍按服务端 enforce-secure-profile 强制（行为与原版一致）」
+   （同时验证了「切面可以作用于接口的静态方法」这一前提）
+2. verify\verify.ps1：mock-modern 22/22、mock-legacy 22/22、real-modern 20/20、
+   real-legacy 20/20、real-10 20/20、配置热重载 —— 全部通过
+
+配置项一览
+---------------------------------------------------------
+  relax_chat_keys         true    聊天密钥三级桥接（Mojang → 皮肤站公钥 → 策略）
+  chat_key_strict         false   三级都验不过时：false 放行 / true 拒绝
+  bypass_signed_commands  true    离线名单玩家的指令按未签名执行
+  offline_chat_exempt     true    离线名单玩家按玩家豁免 enforce-secure-profile
+  server.properties       —       无需修改（enforce-secure-profile 保持默认即可）
+
+升级方式
+---------------------------------------------------------
+替换服务端目录里的 HyAuth-Agent-1.0.0.jar 后重启服务端即可，**不需要改 server.properties**。
+
+★ 真机三方验收（用户真实服务器，2026-09-26 19:52）
+---------------------------------------------------------
+  正版 _azxt_
+      聊天密钥桥接：Mojang 官方验签通过（正版账号，走原版校验）。      ← 桥接第 1 级
+      <_azxt_> 6                                                    ← 正常聊天
+
+  LittleSkin SUNxiaohaohao
+      匹配到 LittleSkin 白名单玩家 → 通过 LittleSkin 鉴权成功！
+      聊天密钥桥接：皮肤站公钥验签通过（算法 SHA1withRSA）           ← 桥接第 2 级（真实验签！）
+      <SUNxiaohaohao> 进了                                          ← 正常聊天，未被踢
+
+  离线名单 azxt（enforce-secure-profile 保持 true）
+      已改写目标类字节码: net.minecraft.network.chat.SignedMessageChain$Decoder
+      离线名单玩家已豁免 enforce-secure-profile：他们可以正常聊天（显示 [Not Secure]）
+      [Not Secure] <azxt> 6                                         ← 未签名聊天正常广播
+
+  三个新切面均已确认挂载（23 个 Agent 辅助类注入）：
+      net.minecraft.server.Services
+      net.minecraft.server.network.ServerGamePacketListenerImpl
+      net.minecraft.network.chat.SignedMessageChain$Decoder
+      另有 com.mojang.authlib.services.MinecraftServicesSessionService
+      与登录握手的 ClientboundHelloPacket / ServerLoginPacketListenerImpl
+
+  结论：正版走 Mojang 验签、外置账号走皮肤站公钥验签（都是真实验签），
+        离线名单玩家按玩家豁免走未签名聊天 —— 三类玩家无需关闭任何全局安全开关即可同时可用。
+
+  注：日志确认 LittleSkin 用 signaturePublickey 签发玩家证书，因此第 2 级能真验；
+      但仍建议保持 chat_key_strict=false（默认），因为离线名单玩家的客户端可能自行生成
+      无法验证的密钥，严格模式会把这类玩家重新踢下线。

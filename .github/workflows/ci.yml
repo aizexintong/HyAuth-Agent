@@ -1,0 +1,61 @@
+name: CI
+
+# 每次推送到 main / 提 PR / 手动触发时：构建 jar + 跑全套自检
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    # 自检脚本是 PowerShell 且按 Windows 路径开发（verify/*.ps1），直接放 Windows runner 上跑最省事
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # 编译目标是 --release 8，JDK 21/25 都能编；运行时的 Java 25 由玩家/服务端自己准备
+          java-version: '21'
+          cache: maven
+
+      - name: 构建 Agent jar
+        run: mvn -B -ntp clean package
+
+      - name: 自检 1/3 · 类加载器隔离（切面真的挂上了）
+        shell: pwsh
+        run: ./verify/loaderiso.ps1
+
+      - name: 自检 2/3 · 外置账号聊天广播（逐接收者分流）
+        shell: pwsh
+        run: ./verify/chat.ps1
+
+      - name: 自检 3/3 · Authlib 3/6/10 兼容与鉴权分流 + 热重载
+        shell: pwsh
+        run: ./verify/verify.ps1
+
+      - name: 打印产物信息
+        shell: pwsh
+        run: |
+          $jar = Get-Item target/HyAuth-Agent-1.0.0.jar
+          $hash = (Get-FileHash $jar.FullName -Algorithm SHA256).Hash.ToLower()
+          "大小  : $($jar.Length) 字节"
+          "SHA256: $hash"
+          Add-Content -Path BUILD.txt -Value "`n本次 CI 构建: $hash"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: HyAuth-Agent-jar
+          path: |
+            target/HyAuth-Agent-*.jar
+            BUILD.txt
+          if-no-files-found: error

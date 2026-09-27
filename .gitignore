@@ -1,0 +1,61 @@
+# ============================================================
+#  HyAuth-Agent .gitignore
+#  只提交「源码 / 文档 / 自检脚本」；构建产物、依赖缓存、第三方工具、运行时文件一律不进仓库。
+# ============================================================
+
+# ---------- 构建产物 ----------
+target/
+build/
+out/
+*.class
+
+# 发布用的 jar 由 GitHub Actions 构建并挂到 Release，不进仓库
+*.jar
+*.war
+
+# ---------- 依赖缓存 ----------
+.m2repo/
+verify/libs/
+
+# ---------- 可选的「免安装 Maven」 ----------
+# build.bat / build.sh 会优先用 PATH 里的 mvn，找不到才用 tools\apache-maven-3.9.9。
+# 想把这个约 11MB 的工具链也放进仓库（方便"零安装构建"）→ 删掉下面这一行。
+tools/
+
+# ---------- 服务端 / 运行时文件（万一在仓库目录里直接开服也别提交） ----------
+server.jar
+eula.txt
+server.properties
+littleskin_config.json
+banned-ips.json
+banned-players.json
+ops.json
+whitelist.json
+usercache.json
+logs/
+crash-reports/
+world/
+world_nether/
+world_the_end/
+libraries/
+versions/
+
+# ---------- IDE / 编辑器 ----------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+
+# ---------- 操作系统 ----------
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---------- 临时文件 ----------
+*.tmp
+*.log
