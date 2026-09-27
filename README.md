@@ -238,18 +238,27 @@ Premain-Class: com.hyauth.agent.AgentMain
 | 工作流 | 触发 | 做什么 |
 | --- | --- | --- |
 | `ci.yml` | push 到 `main` / 提 PR / 手动 | `mvn clean package` → 依次跑 `verify\loaderiso.ps1`、`verify\chat.ps1`、`verify\verify.ps1` → 上传 `HyAuth-Agent-*.jar` 与 `BUILD.txt` 作为 Actions 产物 |
-| `release.yml` | **推送 `v*` 标签** / 手动指定标签 | 构建 + 同上三套自检 → 计算 SHA256 → 自动创建 GitHub Release，附 `HyAuth-Agent-1.0.0.jar`、同名带版本号的副本（如 `HyAuth-Agent-v1.0.2.jar`）与 `BUILD.txt` |
+| `release.yml` | **push 到 `main`**（自动把修订号 +1）/ 推送 `v*` 标签 / 手动触发（可选 patch / minor / major） | 先算版本号（拿最后一个 `v*` 标签递增）→ 构建 + 同上三套自检 → 计算 SHA256 → 打标签并创建 GitHub Release，附 `HyAuth-Agent-1.0.0.jar`、带版本号的副本（如 `HyAuth-Agent-v1.0.3.jar`）与 `BUILD.txt` |
 
-发一个版本就这么简单：
+**平时什么都不用做**：往 `main` 推一次代码，就会自动发布一个修订号自增的版本（`v1.0.3` → `v1.0.4` → …）。
+需要主/次版本，或用某个固定版本号时：
 
 ```bash
-git tag -a v1.0.2 -m "聊天逐接收者分流 + CI/Release"
-git push origin v1.0.2        # → Actions 自动构建并生成 Release
+# 方式 1：显式打标签（按该标签发布）
+git tag -a v1.1.0 -m "新增 XXX" && git push origin v1.1.0
+
+# 方式 2：仓库 → Actions → Release → Run workflow → bump 选 minor / major
 ```
 
-> 想换 runner / JDK，直接改 `.github/workflows/*.yml` 即可
-> （自检脚本按 Windows 路径开发，所以两条工作流都用 `windows-latest`；换成 `ubuntu-latest` 需要
-> 自行适配脚本里的 `$env:TEMP` 等 Windows 习惯）。
+> 细节：
+> * 仓库里还没有任何 `v*` 标签时以 `v1.0.2` 为基准（文档里的 v1.0.0 ~ v1.0.2 是开发期内部版本），
+>   所以第一次自动发布是 `v1.0.3`；
+> * 当前提交已经带 `v*` 标签时不会重复发布（交给 tag 事件）；
+> * Actions 自己打的标签不会再触发工作流（GITHUB_TOKEN 的规则），不会无限循环；
+> * Maven 版本号固定是 `1.0.0`，发布版本由标签/Release 体现（jar 里的 `Implementation-Version` 仍是 1.0.0）——
+>   这样 `start.sh` / `start.bat` 与自检脚本里的固定文件名不用跟着每次改；
+> * 想换 runner / JDK 直接改 `.github/workflows/*.yml`（自检脚本按 Windows 路径开发，所以两条工作流都用
+>   `windows-latest`；版本号那一步是纯 git，用省钱的 `ubuntu-latest`）。
 
 ### 4.6 仓库里不提交什么（`.gitignore`）
 
