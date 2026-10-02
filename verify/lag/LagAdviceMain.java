@@ -555,16 +555,16 @@ public class LagAdviceMain {
         writeOldStyleConfig();
         listManager.getMethod("reload").invoke(null);
         String completed = read("littleskin_config.json");
-        check(completed.contains("\"config_version\": 4"),
-                "老配置（没有 config_version）加载后被盖上当前配置版本号 v4");
+        check(completed.contains("\"config_version\": 5"),
+                "老配置（没有 config_version）加载后被盖上当前配置版本号 v5");
         check(completed.contains("\"chunk_lag\"") && completed.contains("\"commands\"") && completed.contains("\"clear\""),
                 "同时把三块新版配置（chunk_lag / commands / clear）按默认值补写进文件");
         check(completed.contains("break_bedrock") && completed.contains("interval_ticks") && completed.contains("roots"),
                 "补齐的是具体可调项（clear.* / commands.*），管理员打开文件就能看到有哪些能调");
         check(completed.contains("OldGuy") && completed.contains("OldOff") && completed.contains(CONFLICT_UUID),
                 "账号信息原样保留：已有的外置名字、离线条目与它的 UUID 都没被动过");
-        check(Integer.valueOf(4).equals(listManager.getMethod("getConfigVersion").invoke(null)),
-                "内存里的配置版本也同步成 v4（/hy status 会显示）");
+        check(Integer.valueOf(5).equals(listManager.getMethod("getConfigVersion").invoke(null)),
+                "内存里的配置版本也同步成 v5（/hy status 会显示）");
         writeConfig(true);
         listManager.getMethod("reload").invoke(null);
 
@@ -860,7 +860,7 @@ public class LagAdviceMain {
 
     private static void writeConfig(boolean breakBedrock) throws Exception {
         String json = "{\n"
-                + "  \"config_version\": 4,\n"
+                + "  \"config_version\": 5,\n"
                 + "  \"description\": \"lag 自检配置\",\n"
                 + "  \"littleskin_players\": [],\n"
                 + "  \"offline_players\": [],\n"

@@ -55,13 +55,14 @@ public final class ListManager {
      *   v2  聊天链路开关（relax_chat_keys / bypass_signed_commands / offline_chat_exempt …）
      *   v3  区块卡顿勘探 + 管理员命令（chunk_lag.* / commands.*）
      *   v4  空置域挖掘（clear.*，含基岩开关）
+     *   v5  额外信任的管理员名单（commands.extra_admins）
      * </pre>
      *
      * <p>启动/热重载时会把文件里的 {@code config_version} 与本值校对：
      * 低版本 → 自动补齐缺失的配置项（只新增，<b>已有账号信息与已有值一律原样保留</b>）并盖上当前版本；
      * 高版本（配置文件来自更新的插件）→ 只读取、不写回，避免把新字段抹掉。
      */
-    public static final int CONFIG_VERSION = 4;
+    public static final int CONFIG_VERSION = 5;
 
     /** 配置文件里声明的版本（没有这个字段的老配置按 0 处理）。 */
     private static volatile int configVersion = 0;
@@ -420,6 +421,7 @@ public final class ListManager {
                 }
                 added.add("commands.roots(默认值)");
             }
+            ensureArray(commands, "extra_admins", added, "commands.");
             ensureInt(commands, "op_level", 2, added, "commands.");
         }
 
@@ -584,6 +586,7 @@ public final class ListManager {
                 roots.add(root);
             }
             commands.add("roots", roots);
+            commands.add("extra_admins", new JsonArray());
             commands.addProperty("op_level", 2);
             config.add("commands", commands);
 
@@ -744,6 +747,20 @@ public final class ListManager {
             }
             commandRoots = Collections.unmodifiableSet(roots);
             commandOpLevel = clampInt(optInt(commands, "op_level", 2), 0, 4);
+            // 额外信任的管理员：名字或 UUID（不区分大小写）。原版 op 是按 UUID 认的，
+            // 所以"用另一个账号登录的管理员"（例如正版名 vs 离线名）会判成 0 级 —— 这里可以显式列出来。
+            Set<String> extras = new LinkedHashSet<String>();
+            if (commands != null && commands.has("extra_admins") && commands.get("extra_admins").isJsonArray()) {
+                for (JsonElement element : commands.getAsJsonArray("extra_admins")) {
+                    if (element != null && !element.isJsonNull()) {
+                        String value = element.getAsString().trim();
+                        if (!value.isEmpty()) {
+                            extras.add(value.toLowerCase(Locale.ROOT));
+                        }
+                    }
+                }
+            }
+            extraAdmins = Collections.unmodifiableSet(extras);
 
             // 空置域挖掘
             JsonObject clear = json.has("clear") && !json.get("clear").isJsonNull() && json.get("clear").isJsonObject()
@@ -947,10 +964,23 @@ public final class ListManager {
         return builder.toString();
     }
 
+    /** 额外信任的管理员集合（小写；名字与 UUID 混存）。 */
+    public static Set<String> getExtraAdmins() {
+        return extraAdmins;
+    }
+
+    /** 该名字/UUID 是否在额外信任的管理员名单里。 */
+    public static boolean isExtraAdmin(String nameOrUuid) {
+        return nameOrUuid != null && extraAdmins.contains(nameOrUuid.trim().toLowerCase(Locale.ROOT));
+    }
+
     /** 当前 LittleSkin 外置名单（只读，名字为小写存储形式）。 */
     public static Set<String> getLittleSkinPlayers() {
         return whitelist;
     }
+
+    /** 额外信任的管理员（名字或 UUID，不区分大小写）：解决"我是管理员但当前登录身份没被 op"。 */
+    private static volatile Set<String> extraAdmins = Collections.emptySet();
 
     /** 配置文件里声明的版本（老配置没有该字段时为 0）。 */
     public static int getConfigVersion() {

@@ -267,7 +267,7 @@ Agent 只在文件**不存在**时创建它，之后**只读不改**——除了
 
 ### 5.1 配置版本与自动补齐（升级友好）
 
-配置文件带一个 `config_version`（当前 **v4**）。每次启动 / 热重载都会校对：
+配置文件带一个 `config_version`（当前 **v5**）。每次启动 / 热重载都会校对：
 
 | 情况 | 行为 |
 | --- | --- |
@@ -290,6 +290,7 @@ Agent 只在文件**不存在**时创建它，之后**只读不改**——除了
 | v2 | 聊天链路开关（`relax_chat_keys` / `bypass_signed_commands` / `offline_chat_exempt` …） |
 | v3 | 区块卡顿勘探 + 管理员命令（`chunk_lag.*` / `commands.*`） |
 | v4 | 空置域挖掘（`clear.*`，含基岩开关） |
+| v5 | 额外信任的管理员名单（`commands.extra_admins`） |
 
 `/hy status` 会显示"配置文件版本 vN（本插件支持 vM）"。
 
@@ -323,7 +324,7 @@ Agent 只在文件**不存在**时创建它，之后**只读不改**——除了
     "max_clusters": 8,
     "max_tracked_chunks": 20000
   },
-  "commands": { "roots": [ "hy", "ha", "hyauth", "lag" ], "op_level": 2 },
+  "commands": { "roots": [ "hy", "ha", "hyauth", "lag" ], "op_level": 2, "extra_admins": [] },
   "clear": {
     "op_level": 3,
     "interval_ticks": 4,
@@ -370,6 +371,7 @@ Agent 只在文件**不存在**时创建它，之后**只读不改**——除了
 | `chunk_lag.max_tracked_chunks` | `20000` | 常驻窗口最多跟踪多少区块 |
 | `commands.roots` | `["hy","ha","hyauth","lag"]` | 命令根（小写字母/数字/下划线，1~16 位；`lag` 自动保留）；**与原版命令同名的会被拒绝** |
 | `commands.op_level` | `2` | 名单/勘探命令所需权限等级（0~4） |
+| `commands.extra_admins` | `[]` | **额外信任的管理员**（名字或 UUID，不区分大小写）。原版 op 按 UUID 认人，换账号登录（正版名 vs 离线名）会判成 0 级；把那个名字/UUID 写进来即可。判定顺序：extra_admins → `hasPermission(int)`（旧版）→ `permissions()/PermissionSet`（26.x）→ **直接读原版 op 名单（ops.json）** |
 | `clear.op_level` | `3` | 挖掘命令所需权限等级（默认更高，因为不可撤销） |
 | `clear.interval_ticks` | `4` | 每多少 tick 推进一步（越大越温柔） |
 | `clear.fills_per_step` | `2` | 每个节拍最多推进几步 |
