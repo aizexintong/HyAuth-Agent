@@ -101,11 +101,11 @@ public final class AdminCommands {
             reload(source, root);
         } else if ("list".equals(verb) || "ls".equals(verb)) {
             list(source, root);
-        } else if ("add".equals(verb) || "+".equals(verb)) {
+        } else if ("add".equals(verb)) {
             add(tokens, 2, source, root);
         } else if ("off".equals(verb) || "offline".equals(verb)) {
             offline(tokens, 2, source, root);
-        } else if ("del".equals(verb) || "remove".equals(verb) || "-".equals(verb)) {
+        } else if ("del".equals(verb) || "remove".equals(verb)) {
             remove(tokens, 2, source, root);
         } else if ("whois".equals(verb) || "uuid".equals(verb) || "id".equals(verb)) {
             whois(tokens, 2, source, root);
@@ -414,16 +414,79 @@ public final class AdminCommands {
     }
 
     // ==================================================================
-    // 名单管理（都支持一次给多个名字，例如 /hy add A B C）
+    // 名单管理
+    //
+    //   加人：/hy add ex  <名字…>        加入 LittleSkin 外置名单
+    //         /hy add off <名字…>        加入离线名单（自动 UUIDv7，先查重）
+    //         /hy add off <名字> <uuid>  加入离线名单，沿用这条原始记录的 名字+UUID
+    //   改离线：/hy off <名字> <uuid>     把它的 UUID 改成指定的（沿用原始身份）
+    //           /hy off <名字> force      给它换一个新的 UUIDv7
+    //   删除：/hy del <名字…>            按名字删（名字唯一，不分外置/离线）
+    //
+    //   批量：名字之间用空格隔开即可；只有"指定 UUID"那一种不能批量（UUID 是某个人的身份证）。
     // ==================================================================
 
     private static void add(String[] tokens, int at, Object source, String root) {
-        List<String> names = namesFrom(tokens, at);
-        if (names.isEmpty()) {
-            ChatOut.warn(source, "用法: /" + root + " add <玩家名> [更多名字…]   例: /" + root + " add Steve Alex");
-            ChatOut.note(source, "（别名: /" + root + " + 名字）加入 LittleSkin 外置名单；写文件后自动热重载");
+        if (at >= tokens.length) {
+            printAddHelp(source, root);
             return;
         }
+        String kind = tokens[at].toLowerCase(Locale.ROOT);
+        List<String> rest = namesFrom(tokens, at + 1);
+        if (isExternalKind(kind)) {
+            if (rest.isEmpty()) {
+                ChatOut.warn(source, "用法: /" + root + " add ex <名字> [更多名字…]   例: /" + root + " add ex Steve Alex");
+                return;
+            }
+            addLittleSkinBatch(rest, source, root);
+        } else if (isOfflineKind(kind)) {
+            if (rest.isEmpty()) {
+                ChatOut.warn(source, "用法: /" + root + " add off <名字> [更多名字…] [uuid]");
+                ChatOut.note(source, "  例: /" + root + " add off Steve Alex        ← 两个名字，各自自动生成 UUIDv7");
+                ChatOut.note(source, "      /" + root + " add off Steve 4510a1f8-…   ← 沿用这条原始记录的 名字+UUID（只能一个名字）");
+                return;
+            }
+            UUID specified = null;
+            if (rest.size() >= 2) {
+                UUID parsed = UuidV7.parse(rest.get(rest.size() - 1));
+                if (parsed != null) {
+                    specified = parsed;
+                    rest.remove(rest.size() - 1);
+                }
+            }
+            if (specified != null && rest.size() > 1) {
+                ChatOut.error(source, "指定 UUID 时只能给一个名字（UUID 是某个人的身份证，没法一对多）。");
+                return;
+            }
+            handleOfflineNames(rest, specified, false, source, root);
+        } else {
+            ChatOut.error(source, "要说明加哪一种：/" + root + " add ex <名字>（外置）或 /" + root
+                    + " add off <名字>（离线）。");
+            printAddHelp(source, root);
+        }
+    }
+
+    private static void printAddHelp(Object source, String root) {
+        ChatOut.head(source, "===== 加入名单 =====");
+        ChatOut.line(source, "  /" + root + " add ex  <名字> [名字…]        加入 LittleSkin 外置名单（玩家用外置登录进服）");
+        ChatOut.line(source, "  /" + root + " add off <名字> [名字…]        加入离线名单：自动生成 UUIDv7（先扫全服已有 UUID 查重）");
+        ChatOut.line(source, "  /" + root + " add off <名字> <uuid>         加入离线名单：沿用这条原始记录的 名字+UUID（保住老存档的背包/成就）");
+        ChatOut.note(source, "批量＝名字之间用空格隔开，例如 /" + root + " add ex A B C、/" + root
+                + " add off D E；只有「指定 UUID」那一种只能一个名字。");
+        ChatOut.note(source, "改已有离线玩家的 UUID 用 /" + root + " off …（/" + root + " off <名字> force 换新）。");
+    }
+
+    private static boolean isExternalKind(String kind) {
+        return "ex".equals(kind) || "ext".equals(kind) || "external".equals(kind)
+                || "littleskin".equals(kind) || "skin".equals(kind) || "外置".equals(kind);
+    }
+
+    private static boolean isOfflineKind(String kind) {
+        return "off".equals(kind) || "offline".equals(kind) || "离线".equals(kind);
+    }
+
+    /** 批量加入 LittleSkin 外置名单。 */
+    private static void addLittleSkinBatch(List<String> names, Object source, String root) {
         int ok = 0;
         int failed = 0;
         for (String name : names) {
@@ -442,10 +505,21 @@ public final class AdminCommands {
                 failed++;
             }
         }
-        if (names.size() > 1) {
-            ChatOut.line(source, "批量结果: 成功 " + ok + " 个" + (failed > 0 ? "，失败 " + failed + " 个" : "")
-                    + "（共 " + names.size() + " 个）");
+        summarize(names.size(), ok, 0, failed, source);
+    }
+
+    private static void summarize(int total, int ok, int blocked, int failed, Object source) {
+        if (total <= 1) {
+            return;
         }
+        StringBuilder line = new StringBuilder("批量结果（共 " + total + " 个）: 成功 " + ok + " 个");
+        if (blocked > 0) {
+            line.append("，因已有身份被拦下 ").append(blocked).append(" 个");
+        }
+        if (failed > 0) {
+            line.append("，失败 ").append(failed).append(" 个");
+        }
+        ChatOut.line(source, line.toString());
     }
 
     /** 从 tokens[at..] 收集名字（保持管理员写法）。 */
@@ -463,16 +537,19 @@ public final class AdminCommands {
         return names;
     }
 
+    /**
+     * 离线名单的入口：{@code off <名字…> [uuid|force]}。
+     * <p>不带第三个参数＝确保这些名字在离线名单里（没有身份就发新 UUIDv7，已有身份会拦下）；
+     * 带 uuid＝把这条改成指定的 UUID（沿用原始身份）；带 force＝换一个新的 UUIDv7。
+     */
     private static void offline(String[] tokens, int at, Object source, String root) {
         List<String> names = namesFrom(tokens, at);
         if (names.isEmpty()) {
-            ChatOut.warn(source, "用法: /" + root + " off <玩家名> [更多名字…] [uuid|force]");
-            ChatOut.note(source, "  不带第三参：自动生成 UUIDv7（生成前先扫已有 UUID 查重；这个名字若已有身份会拦下来）");
-            ChatOut.note(source, "  带 uuid   ：沿用你指定的 UUID（保住老存档的背包/成就），只能配一个名字");
-            ChatOut.note(source, "  force/new ：确认要给已有身份的名字换一个新 UUIDv7（可批量）");
-            ChatOut.note(source, "  例: /" + root + " off Steve Alex        ← 两个名字一起加");
-            ChatOut.note(source, "      /" + root + " off Steve force       ← 给已有身份的 Steve 换新身份证");
-            ChatOut.note(source, "      /" + root + " off Steve 4510a1f8-…   ← 沿用 Steve 的旧 UUID");
+            ChatOut.head(source, "===== 离线名单：改已有玩家的 UUID =====");
+            ChatOut.line(source, "  /" + root + " off <名字> force          给它换一个新的 UUIDv7（覆盖既有身份）");
+            ChatOut.line(source, "  /" + root + " off <名字> <uuid>           把它的 UUID 改成指定的这个（沿用原始身份）");
+            ChatOut.note(source, "加新玩家请用 /" + root + " add off <名字> [名字…]（会自动生成 UUIDv7 并查重）。");
+            ChatOut.note(source, "批量＝名字之间用空格隔开：/" + root + " off A B force；「指定 UUID」只能一个名字。");
             return;
         }
         boolean force = false;
@@ -489,14 +566,19 @@ public final class AdminCommands {
             }
         }
         if (names.isEmpty()) {
-            ChatOut.warn(source, "只给了 force/uuid，没有名字：/" + root + " off <玩家名> [uuid|force]");
+            ChatOut.warn(source, "只给了 force/uuid，没有名字：/" + root + " off <名字> [uuid|force]");
             return;
         }
         if (specified != null && names.size() > 1) {
-            ChatOut.error(source, "指定 UUID 时只能给一个名字（UUID 是「这个人的身份证」，不能一对多）。");
+            ChatOut.error(source, "指定 UUID 时只能给一个名字（UUID 是某个人的身份证，没法一对多）。");
             return;
         }
+        handleOfflineNames(names, specified, force, source, root);
+    }
 
+    /** 离线名单的实际处理（add off 与 off 两条路共用）。 */
+    private static void handleOfflineNames(List<String> names, UUID specified, boolean force,
+                                           Object source, String root) {
         int ok = 0;
         int blocked = 0;
         int failed = 0;
@@ -511,9 +593,9 @@ public final class AdminCommands {
             }
         }
         if (names.size() > 1) {
-            ChatOut.line(source, "批量结果: 成功 " + ok + " 个"
-                    + (blocked > 0 ? "，因已有身份被拦下 " + blocked + " 个（想强行换新用 force）" : "")
-                    + (failed > 0 ? "，失败 " + failed + " 个" : "") + "（共 " + names.size() + " 个）");
+            ChatOut.line(source, "批量结果（共 " + names.size() + " 个）: 成功 " + ok + " 个"
+                    + (blocked > 0 ? "，因已有身份被拦下 " + blocked + " 个（要强行换新就加 force）" : "")
+                    + (failed > 0 ? "，失败 " + failed + " 个" : ""));
         }
     }
 
@@ -580,8 +662,8 @@ public final class AdminCommands {
     private static void remove(String[] tokens, int at, Object source, String root) {
         List<String> names = namesFrom(tokens, at);
         if (names.isEmpty()) {
-            ChatOut.warn(source, "用法: /" + root + " del <玩家名> [更多名字…]   例: /" + root + " del Steve Alex");
-            ChatOut.note(source, "（别名: /" + root + " - 名字）从两个名单里移除");
+            ChatOut.warn(source, "用法: /" + root + " del <名字> [更多名字…]   例: /" + root + " del Steve Alex");
+            ChatOut.note(source, "按名字删除即可：名字在服务端上是唯一的，不用管它在哪个名单里。");
             return;
         }
         int ok = 0;
@@ -678,13 +760,15 @@ public final class AdminCommands {
 
     private static void help(Object source, String root) {
         ChatOut.head(source, "===== HyAuth 管理员命令（需要权限等级 ≥ " + ListManager.getCommandOpLevel() + "）=====");
-        ChatOut.line(source, "  /" + root + " add <名字> [更多…]          加入 LittleSkin 外置名单（别名: /" + root + " + 名字）");
-        ChatOut.line(source, "  /" + root + " off <名字> [更多…] [uuid|force]  加入离线名单：自动 UUIDv7 + 先查重");
-        ChatOut.line(source, "  /" + root + " del <名字> [更多…]          从两个名单移除（别名: /" + root + " - 名字）");
-        ChatOut.line(source, "  /" + root + " list | ls                  查看两个名单");
-        ChatOut.line(source, "  /" + root + " whois <名字> | id          查这个名字在服务端上的历史 UUID");
-        ChatOut.line(source, "  /" + root + " reload                     重读配置并同步采样开关");
-        ChatOut.line(source, "  /" + root + " status                     运行状态 + 切面能力探测");
+        ChatOut.line(source, "  —— 名单 ——（批量＝名字用空格隔开，例: /" + root + " add off A B C）");
+        ChatOut.line(source, "  /" + root + " add ex  <名字> [名字…]       加入 LittleSkin 外置名单");
+        ChatOut.line(source, "  /" + root + " add off <名字> [名字…]       加入离线名单：自动 UUIDv7 + 先查重");
+        ChatOut.line(source, "  /" + root + " add off <名字> <uuid>        加入离线名单：沿用这条原始记录的 名字+UUID");
+        ChatOut.line(source, "  /" + root + " off <名字> force            改已有离线玩家：换一个新的 UUIDv7");
+        ChatOut.line(source, "  /" + root + " off <名字> <uuid>           改已有离线玩家：UUID 改成指定的这个");
+        ChatOut.line(source, "  /" + root + " del <名字> [名字…]           按名字删除（名字唯一，不分外置/离线）");
+        ChatOut.line(source, "  /" + root + " list | ls · whois <名字> | id  查看两个名单 / 查名字的历史身份");
+        ChatOut.line(source, "  /" + root + " reload · status            重读配置 / 运行状态与切面能力探测");
         ChatOut.head(source, "  —— 区块卡顿勘探（服务端侧，无需客户端 Mod）——");
         ChatOut.line(source, "  /" + root + " lag                      直接看异常区块坐标范围（最常用，点一下就能传送）");
         ChatOut.line(source, "  /" + root + " lag 30                   采样 30 秒后自动出报告（= lag scan 30）");

@@ -28,7 +28,12 @@ $verify = $PSScriptRoot
 
 $java = if ($JavaHome -and (Test-Path (Join-Path $JavaHome "bin\java.exe"))) { Join-Path $JavaHome "bin\java.exe" } else { "java" }
 $javac = if ($JavaHome -and (Test-Path (Join-Path $JavaHome "bin\javac.exe"))) { Join-Path $JavaHome "bin\javac.exe" } else { "javac" }
-Write-Host "[lag] java = $java"
+Write-Host "[lag] PowerShell = $($PSVersionTable.PSVersion) （$($PSVersionTable.PSEdition)）"
+Write-Host "[lag] java  = $java"
+Write-Host "[lag] javac = $javac"
+# 环境自曝：失败时日志里就能直接看出用的哪个 JDK / 哪个 PowerShell（CI 与本机都适用）
+try { Write-Host "[lag] java 版本 = $((& $java -version 2>&1 | Select-Object -First 1))" } catch { Write-Host "[lag] 无法执行 java：$($_.Exception.Message)" }
+try { Write-Host "[lag] javac 版本 = $((& $javac -version 2>&1 | Select-Object -First 1))" } catch { Write-Host "[lag] 无法执行 javac：$($_.Exception.Message)" }
 
 # ---------- 依赖（ListManager / ConfigWriter 需要 gson） ----------
 $libs = Join-Path $verify "libs"
@@ -44,7 +49,7 @@ if (-not (Test-Path $gson)) {
 # ---------- Agent 包 ----------
 $agent = Join-Path $root "target\HyAuth-Agent-1.0.0.jar"
 if (-not (Test-Path $agent)) { Write-Host "[lag] 未找到 $agent，请先构建（build.bat 或 mvn clean package）"; exit 1 }
-Write-Host "[lag] agent = $agent"
+Write-Host "[lag] agent = $agent（$((Get-Item $agent).Length) 字节）"
 
 # ---------- 编译 ----------
 $out = Join-Path $env:TEMP ("hyauth-lag-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -52,16 +57,30 @@ $stubs = Join-Path $out "stubs"
 $app = Join-Path $out "app"
 $run = Join-Path $out "run"
 New-Item -ItemType Directory -Force -Path $stubs, $app, $run | Out-Null
+Write-Host "[lag] 工作目录 = $out"
 
 Write-Host "[lag] 编译 26.x 形状的服务端替身 ..."
 $stubSources = Get-ChildItem -Recurse -File -Filter *.java (Join-Path $verify "lag\net") |
     Select-Object -ExpandProperty FullName
-& $javac -nowarn -encoding UTF-8 -d $stubs @stubSources
-if ($LASTEXITCODE -ne 0) { Write-Host "[lag] 替身编译失败"; exit 1 }
+if (-not $stubSources -or $stubSources.Count -eq 0) {
+    Write-Host "[lag] 没找到替身源码（verify\lag\net\**\*.java）—— checkout 是否完整？"
+    exit 1
+}
+& $javac -nowarn -encoding UTF-8 -d $stubs @stubSources 2>&1 | Tee-Object -Variable stubOut | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[lag] 替身编译失败（javac 退出码 $LASTEXITCODE），前若干行输出："
+    $stubOut | Select-Object -First 30 | ForEach-Object { Write-Host "    $_" }
+    exit 1
+}
 
 Write-Host "[lag] 编译测试主程序 ..."
-& $javac -nowarn -encoding UTF-8 -d $app -cp "$agent;$gson" (Join-Path $verify "lag\LagAdviceMain.java")
-if ($LASTEXITCODE -ne 0) { Write-Host "[lag] 测试主程序编译失败"; exit 1 }
+& $javac -nowarn -encoding UTF-8 -d $app -cp "$agent;$gson" (Join-Path $verify "lag\LagAdviceMain.java") 2>&1 |
+    Tee-Object -Variable appOut | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[lag] 测试主程序编译失败（javac 退出码 $LASTEXITCODE），前若干行输出："
+    $appOut | Select-Object -First 30 | ForEach-Object { Write-Host "    $_" }
+    exit 1
+}
 
 # ---------- 运行 ----------
 Write-Host ""

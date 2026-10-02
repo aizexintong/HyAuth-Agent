@@ -250,41 +250,51 @@ public class LagAdviceMain {
                 .invoke(commands, console, "/hy off ConflictGuy " + CONFLICT_UUID);
         String afterAdopt = read("littleskin_config.json");
         check(afterAdopt.contains(CONFLICT_UUID),
-                "「/hy off ConflictGuy <旧UUID>」按管理员指定沿用旧身份（保住背包/成就）");
+                "「/hy off ConflictGuy <旧UUID>」把它的 UUID 改成指定的这个（沿用原始身份）");
 
-        // 外置名单
+        // 换新 UUIDv7（force）
         sourceType.getMethod("reset").invoke(null);
-        commandsType.getMethod("performPrefixedCommand", sourceType, String.class)
-                .invoke(commands, console, "/hy add LittleGuy");
+        run(commandsType, sourceType, commands, console, "/hy off ConflictGuy force");
+        String afterForce = read("littleskin_config.json");
+        String forcedUuid = firstUuidFor(afterForce, "ConflictGuy");
+        check(forcedUuid != null && !CONFLICT_UUID.equalsIgnoreCase(forcedUuid) && forcedUuid.charAt(14) == '7',
+                "「/hy off ConflictGuy force」换了一个新的 UUIDv7（原 " + CONFLICT_UUID + " → " + forcedUuid + "）");
+
+        // 外置名单（add 必须说明加哪种：ex = 外置 / off = 离线）
+        sourceType.getMethod("reset").invoke(null);
+        run(commandsType, sourceType, commands, console, "/hy add ex LittleGuy");
         check(read("littleskin_config.json").contains("LittleGuy"),
-                "「/hy add LittleGuy」写进 LittleSkin 外置名单");
-
-        // 6b) 省事写法：批量 + 别名
+                "「/hy add ex LittleGuy」写进 LittleSkin 外置名单");
         sourceType.getMethod("reset").invoke(null);
-        run(commandsType, sourceType, commands, console, "/hy add BatchA BatchB");
+        run(commandsType, sourceType, commands, console, "/hy add Steve");
+        check(said(sourceType, "要说明加哪一种"), "「/hy add 名字」不说明类型时给出提示（不会猜错名单）");
+
+        // 6b) 批量 + 类型 + 沿用原始 UUID
+        sourceType.getMethod("reset").invoke(null);
+        run(commandsType, sourceType, commands, console, "/hy add ex BatchA BatchB");
         String afterBatchAdd = read("littleskin_config.json");
         check(afterBatchAdd.contains("BatchA") && afterBatchAdd.contains("BatchB"),
-                "「/hy add A B」一次加多个名字");
+                "「/hy add ex A B」一次加多个外置名字");
         check(said(sourceType, "批量结果"), "批量操作给出汇总（成功/失败/被拦下各几个）");
-        run(commandsType, sourceType, commands, console, "/hy + PlusGuy");
-        check(read("littleskin_config.json").contains("PlusGuy"), "别名「/hy + 名字」＝ add");
-        run(commandsType, sourceType, commands, console, "/hy - PlusGuy");
-        check(!read("littleskin_config.json").contains("PlusGuy"), "别名「/hy - 名字」＝ del");
         run(commandsType, sourceType, commands, console, "/hy del BatchA BatchB");
         String afterBatchDel = read("littleskin_config.json");
-        check(!afterBatchDel.contains("BatchA") && !afterBatchDel.contains("BatchB"), "「/hy del A B」批量移除");
+        check(!afterBatchDel.contains("BatchA") && !afterBatchDel.contains("BatchB"), "「/hy del A B」按名字批量删除");
         sourceType.getMethod("reset").invoke(null);
-        run(commandsType, sourceType, commands, console, "/hy off Off1 Off2");
+        run(commandsType, sourceType, commands, console, "/hy add off Off1 Off2");
         String afterBatchOff = read("littleskin_config.json");
         check(afterBatchOff.contains("Off1") && afterBatchOff.contains("Off2"),
-                "「/hy off A B」批量发离线身份证（每个都独立查重）");
+                "「/hy add off A B」批量加入离线名单（每个都独立查重）");
+        sourceType.getMethod("reset").invoke(null);
+        run(commandsType, sourceType, commands, console, "/hy add off AdoptGuy " + CONFLICT_UUID);
+        check(read("littleskin_config.json").contains("AdoptGuy"),
+                "「/hy add off 名字 <uuid>」沿用这条原始记录的 名字+UUID");
         sourceType.getMethod("reset").invoke(null);
         run(commandsType, sourceType, commands, console, "/hy ls");
         check(said(sourceType, "LittleSkin 外置名单") && said(sourceType, "离线名单"),
-                "别名「/hy ls」＝ list，一次看清两个名单");
+                "「/hy ls」一次看清两个名单");
         sourceType.getMethod("reset").invoke(null);
         run(commandsType, sourceType, commands, console, "/hy id ConflictGuy");
-        check(said(sourceType, "名字身份扫描"), "别名「/hy id 名字」＝ whois");
+        check(said(sourceType, "名字身份扫描"), "「/hy id 名字」＝ whois");
 
         // ---------- 7) 常驻开关 ----------
         commandsType.getMethod("performPrefixedCommand", sourceType, String.class)

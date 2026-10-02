@@ -2,9 +2,9 @@ HyAuth-Agent 构建产物信息
 =========================================================
 
 产物      : target/HyAuth-Agent-1.0.0.jar
-大小      : 9,114,698 字节 (8.69 MB)
-SHA256    : 6b454cd056f6a599b83297dd3234cd68efbeec7c174a9bbc9f484d9c3a0952a1
-构建时间  : 2026-10-02 12:26 (+08:00)
+大小      : 9,115,968 字节 (8.69 MB)
+SHA256    : a13154fbd932e88f4f09104f0564dd1fa4bea3da2ac5c7167264d1d41505aef4
+构建时间  : 2026-10-02 13:10 (+08:00)
 工具链    : JDK 25.0.1 (Microsoft) + Apache Maven 3.9.9, --release 8, shade 打包
 校验命令  : sha256sum HyAuth-Agent-1.0.0.jar
 许可证    : GPL-3.0-or-later（根目录 LICENSE；copyleft，分发衍生作品须同样开源并提供源码）
@@ -28,12 +28,19 @@ SHA256    : 6b454cd056f6a599b83297dd3234cd68efbeec7c174a9bbc9f484d9c3a0952a1
   /hy clear go                   开始挖（= start confirm；预演里还有可点击的「确认开始挖掘」）
   /hy clear status | stop | reset
 
-省事写法（按"命令都要方便直观"补的）：
-  名单: 支持一次多个名字 —— /hy add A B C、/hy off A B C、/hy del A B C（每个名字独立校验与查重，最后给汇总）
-        别名: /hy + 名字（= add）、/hy - 名字（= del）、/hy ls（= list）、/hy id 名字（= whois）
+省事写法（按"命令都要方便直观"定的形式）：
+  名单: /hy add ex  <名字> [名字…]    加入外置（批量＝空格隔开）
+        /hy add off <名字> [名字…]    加入离线：自动 UUIDv7 + 先查重
+        /hy add off <名字> <uuid>     加入离线：沿用这条原始记录的 名字+UUID
+        /hy off <名字> force          改已有离线玩家：换新 UUIDv7
+        /hy off <名字> <uuid>         改已有离线玩家：UUID 改成指定的这个
+        /hy del <名字> [名字…]        按名字删（名字唯一，不分外置/离线）
+        /hy ls · /hy id <名字>        list / whois 的短别名
   勘探: /lag（无参）＝直接出报告；/lag 30 ＝采样 30 秒；/lag tp 2 ＝传送
   挖掘: /hy clear <x1> <z1> <x2> <z2>（对角两点，选完自动预演）、/hy clear <x2> <z2>（以站位为角点1）、
         /hy clear <边长>（以你为中心的方形）、/hy clear go（= start confirm）、/hy clear dim the_nether
+  说明: 名字用空格分隔即为批量；唯一例外是"指定 UUID"只能配一个名字（UUID 是某个人的身份证）。
+        README 文首有一张"命令汇总表"，全部命令一页看完。
 
 基岩开关：
   clear.break_bedrock  true   默认：连基岩一起挖掉（底部是虚空，很多世吞要的"全空底"）
@@ -146,14 +153,16 @@ SHA256    : 6b454cd056f6a599b83297dd3234cd68efbeec7c174a9bbc9f484d9c3a0952a1
 权限门槛 commands.op_level（默认 2 = OP；控制台与 RCON 天然满足）。
 非本命令根一律返回 false 交给原版（自检里专门断言 /tp 不被吞掉）。
 
-  /hy add <名字>                加入 LittleSkin 外置名单
-  /hy off <名字> [uuid|force]   加入离线名单：默认自动生成 UUIDv7，生成前先查重
-  /hy del <名字>                从两个名单移除
-  /hy list                      查看两个名单
-  /hy whois <名字>              查这个名字在服务端上的历史 UUID（查户口）
-  /hy reload                    重读配置并同步常驻采样开关
-  /hy status                    运行状态 + 各切点能力探测
-  /hy lag scan|list|top|tp|here|on|off|stop|clear|status
+  /hy add ex  <名字> [名字…]        加入 LittleSkin 外置名单（批量＝空格隔开）
+  /hy add off <名字> [名字…]        加入离线名单：自动生成 UUIDv7，生成前先查重
+  /hy add off <名字> <uuid>         加入离线名单：沿用这条原始记录的 名字+UUID
+  /hy off <名字> force              改已有离线玩家：换一个新的 UUIDv7
+  /hy off <名字> <uuid>             改已有离线玩家：UUID 改成指定的这个
+  /hy del <名字> [名字…]            按名字删除（名字唯一，不分外置/离线）
+  /hy list | ls · whois <名字> | id  查看两个名单 / 查这个名字的历史 UUID（查户口）
+  /hy reload · status               重读配置并同步常驻采样开关 / 运行状态 + 各切点能力探测
+  /hy lag …（或 /lag）：无参=出报告、<秒>=采样、top、tp、here、on|off、stop、clear、status
+  /hy clear …：见第一块（空置域挖掘）
 
 命令改配置的方式：读文件 → 改字段 → 写 .tmp → ATOMIC_MOVE 替换 → 立刻 reload
 （文件始终是唯一真相，手工编辑与命令改名单不会互相覆盖；gson 保留未定义字段）。

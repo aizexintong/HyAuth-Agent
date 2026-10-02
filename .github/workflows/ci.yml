@@ -23,8 +23,9 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          # 编译目标是 --release 8，JDK 21/25 都能编；运行时的 Java 25 由玩家/服务端自己准备
-          java-version: '21'
+          # 服务端运行时是 Java 25（MC 26.x 要求），所以自检也在 Java 25 上跑：
+          # 编译目标仍是 --release 8，但 Agent 与自检脚本都要在真实运行时版本上验证过
+          java-version: '25'
           cache: maven
 
       - name: 构建 Agent jar

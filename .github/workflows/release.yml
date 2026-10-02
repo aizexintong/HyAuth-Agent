@@ -95,7 +95,8 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          # 与服务端运行时一致：Java 25（编译目标仍是 --release 8）
+          java-version: '25'
           cache: maven
 
       - name: 构建 Agent jar
