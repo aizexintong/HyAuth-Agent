@@ -44,7 +44,11 @@ public class CommandSourceStack {
 
     /** 命令来源的显示名（审计/回显用）。 */
     public String getTextName() {
-        return entity == null ? "Server" : "Player";
+        if (entity == null) {
+            return "Server";
+        }
+        // 替身里允许用字符串当"玩家名"，这样自检能区分"在 op 名单里的玩家"和"普通玩家"
+        return entity instanceof String ? (String) entity : "OpGuy";
     }
 
     /**

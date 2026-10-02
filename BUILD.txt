@@ -16,11 +16,26 @@ HyAuth-Agent 构建与发行记录
 3. 升级只需替换 jar 并重启服务端；**配置文件不用动** ——
    新版本会自动补齐新增的配置项（只新增，账号信息与已有值原样保留，见 README 第五章）。
 
-最近一次发行：v1.0.10
+最近一次发行：v1.0.11
 ---------------------------------------------------------
 （push 到 main 即自动递增发行版号并发布，详情见 Release 页与 README）
 
 这一版新增 / 修复：
+  · 升级策略与配置版本号（v1.0.11）
+      - config_version 改为**跟着编译版本走**：序号 = major*10000+minor*100+patch（v1.0.11 → 10011）；
+        版本来源优先级：系统属性 hyauth.version → 环境变量 HYAUTH_VERSION → jar 清单 Implementation-Version → 1.0.0
+      - 版本不一致时：用**当前版本的最新默认模板重写配置**，只保留用户信息
+        （littleskin_players / offline_players / commands.extra_admins），其余全部回默认，
+        旧文件备份为 littleskin_config.json.bak-v<旧版本>（旧的无用字段会被清掉）
+      - 约定 config_version: -1 = 不触发重置（自检脚本用）
+      - /hy status 会显示"配置文件版本 vN（本插件支持 vM）"与"权限判定依据"
+  · 权限判定收敛为**只认原版 op 名单（ops.json）**：无实体（控制台/RCON）= 管理员；
+    在 ops.json 里 = 管理员（不再纠结它记的等级数字）；其余玩家 = 0；
+    commands.extra_admins 是显式信任名单（默认空，用于"我是管理员但没被 op / 换了账号"）
+  · 修掉方块实体 ticker 切点误伤自己人：匹配器加上 net.minecraft.* 限定，避免把 Agent 自己的
+    匿名内部类也拿去改写（会导致"字节码改写失败"并干扰聊天切面）
+  · 自检同步：三套脚本/测试的配置版本与 jar 内 CONFIG_VERSION 对齐，verify/lag.ps1 现 95 项，
+    四套自检（loaderiso 6/6 · chat 11/11 · lag 95 项 · verify 各 20/20）全部通过
   · 真机第三轮（v1.0.10）：权限判定修正 + 额外信任的管理员名单
       - ★ 修掉"服务端说该玩家已是管理员，插件却判成权限 0"：原来走完 26.x 的 permissions()/PermissionSet
         这条链就 return 0，**没有再往下查原版 op 名单**。现在改成多路兜底：
@@ -119,8 +134,8 @@ HyAuth-Agent 构建与发行记录
 本机构建记录（仅供参考，官方哈希见发行页）
 ---------------------------------------------------------
   环境    : Microsoft OpenJDK 25.0.1 + Apache Maven 3.9.9，--release 8，shade 打包
-  大小    : 9,134,447 字节
-  SHA256  : 472aba4a0236b2547637388928fdc3bc98b00a694d848d20036de88be935192d
+  大小    : 9,135,790 字节
+  SHA256  : f76ff615476d4942ee8f47ec1a78c16100a12ba5e57cf4e4a049288c4b554995
 
 =========================================================
 （以下由 GitHub Actions 在发行时追加）

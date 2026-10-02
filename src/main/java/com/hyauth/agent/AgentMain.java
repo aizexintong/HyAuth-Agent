@@ -356,8 +356,12 @@ public class AgentMain {
                 // 所以这里挂"每个 ticker 的 tick()"，再用 getPos() 反推区块 —— 保住"按区块"的粒度。
                 // 老的 LevelChunk 切点保留给 1.18~1.21.x（那些版本的方块实体也走 ticker，
                 // 但为免同一份耗时记两次，只在老类存在且没有 ticker 切点时才有意义 —— 见 README 说明）。
-                .type(ElementMatchers.hasSuperType(
-                        ElementMatchers.named("net.minecraft.world.level.block.entity.TickingBlockEntity")))
+                // ⚠️ 必须限定 net.minecraft.*：只写 hasSuperType 时，字节码里"名字解析不到"的类
+                //    （我们自己的匿名内部类等）也会被匹配到，出现"字节码改写失败"并干扰其它功能。
+                .type(ElementMatchers.nameStartsWith("net.minecraft.")
+                        .and(ElementMatchers.not(ElementMatchers.isInterface()))
+                        .and(ElementMatchers.hasSuperType(
+                                ElementMatchers.named("net.minecraft.world.level.block.entity.TickingBlockEntity"))))
                 .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
                     LoaderBridge.ensureInjected(classLoader);
                     // 打一行日志证明"真的匹配到 ticker 实现类了"（前 5 个就够，避免刷屏）

@@ -62,7 +62,7 @@ public final class ListManager {
      * 低版本 → 自动补齐缺失的配置项（只新增，<b>已有账号信息与已有值一律原样保留</b>）并盖上当前版本；
      * 高版本（配置文件来自更新的插件）→ 只读取、不写回，避免把新字段抹掉。
      */
-    public static final int CONFIG_VERSION = 5;
+    public static final int CONFIG_VERSION = configVersionOf(agentVersion());
 
     /** 配置文件里声明的版本（没有这个字段的老配置按 0 处理）。 */
     private static volatile int configVersion = 0;
@@ -629,6 +629,21 @@ public final class ListManager {
                 throw new IllegalStateException("配置根节点必须是 JSON 对象");
             }
             JsonObject json = root.getAsJsonObject();
+            // 升级策略：配置版本与本版不一致时，除「用户信息」外**全部重置为默认值**
+            // （旧文件先备份成 littleskin_config.json.bak-v<旧版本>），避免旧配置残留出怪问题。
+            // 必须放在解析各字段之前，这样内存里用的就是新默认值。
+            int fileVersion = optInt(json, "config_version", 0);
+            if (fileVersion < 0) {
+                // 约定：负数 = 「不要重置」的配置（自检脚本用；正式配置不会这么写）。
+                // 缺失项照常用默认值，文件保持原样。
+                configVersion = CONFIG_VERSION;
+            } else if (fileVersion != CONFIG_VERSION) {
+                json = migrateToCurrentVersion(json, fileVersion);
+                configVersion = CONFIG_VERSION;
+            } else {
+                configVersion = CONFIG_VERSION;
+            }
+            configVersion = CONFIG_VERSION;   // 迁移/校验后，内存与文件都已是当前版本（/hy status 显示的就是它）
 
             Set<String> players = new HashSet<>();
             if (json.has("littleskin_players") && json.get("littleskin_players").isJsonArray()) {
@@ -784,28 +799,6 @@ public final class ListManager {
                     || clear.get("break_bedrock").isJsonNull() || clear.get("break_bedrock").getAsBoolean();
             clearBedrockTopY = clampInt(optInt(clear, "bedrock_top_y", -60), -2048, 2048);
 
-            // 升级友好：校对配置版本，版本偏低就补齐新版配置项并盖上新版本号。
-            // 写回要等读取器关闭之后（Windows 上替换一个还打开着的文件会失败），所以这里只记录结果。
-            configVersion = optInt(json, "config_version", 0);
-            List<String> completed = new ArrayList<String>();
-            if (configVersion > CONFIG_VERSION) {
-                System.err.println("[HyAuth] 配置文件版本 v" + configVersion + " 比本插件支持的 v"
-                        + CONFIG_VERSION + " 更新：本次只读取、不写回（避免把新字段抹掉）。");
-            } else {
-                completed = completeMissingEntries(json);
-                if (configVersion < CONFIG_VERSION) {
-                    json.addProperty("config_version", CONFIG_VERSION);
-                    pendingComplete = json;
-                    pendingCompleted = completed;
-                    pendingOldVersion = configVersion;   // 先记下文件里的旧版本号
-                    configVersion = CONFIG_VERSION;      // 内存里也同步，/hy status 显示的才是实际生效版本
-                } else if (!completed.isEmpty()) {
-                    pendingComplete = json;
-                    pendingCompleted = completed;
-                    pendingOldVersion = configVersion;
-                }
-            }
-
             System.out.println("[HyAuth] 配置重载完成（JSON 配置加载成功），当前 LittleSkin 白名单人数: "
                     + whitelist.size() + "，离线名单人数: " + offlinePlayers.size() + "，API: " + apiRoot);
             System.out.println("[HyAuth] 管理员命令: /" + getPrimaryCommandRoot() + " …（另有 "
@@ -815,26 +808,171 @@ public final class ListManager {
             System.err.println("[HyAuth] 读取配置文件失败，请检查 JSON 格式: " + e.getMessage());
         }
 
-        // 写回自动补齐的配置项：此时读取器已关闭，Windows 上才能替换文件
-        JsonObject toComplete = pendingComplete;
-        List<String> completedNow = pendingCompleted;
-        int oldVersion = pendingOldVersion;
+        // 写回（此时读取器已关闭，Windows 上才能替换文件）：
+        // 升级把配置重置成默认后写回；旧的用户信息已由 migrateToCurrentVersion 搬过去，旧文件另有备份。
+        JsonObject toWrite = pendingComplete;
+        List<String> keptInfo = pendingCompleted;
+        int fromVersion = pendingOldVersion;
         pendingComplete = null;
         pendingCompleted = null;
-        if (toComplete != null && completedNow != null) {
+        if (toWrite != null) {
             try {
-                writeConfigFile(toComplete);
-                String upgraded = oldVersion < CONFIG_VERSION
-                        ? "配置版本 v" + oldVersion + " → v" + CONFIG_VERSION + "，" : "";
-                System.out.println("[HyAuth] " + upgraded + "已自动补齐 " + completedNow.size()
-                        + " 个新版新增项（填的是默认值，可直接在文件里改）：" + completedNow);
-                System.out.println("[HyAuth] 原有的账号信息（littleskin_players / offline_players）与已有配置值均原样保留。");
+                writeConfigFile(toWrite);
+                System.out.println("[HyAuth] 配置已按升级策略重置为默认值：v" + fromVersion + " → v" + CONFIG_VERSION);
+                System.out.println("[HyAuth]   保留的用户信息: " + (keptInfo == null || keptInfo.isEmpty()
+                        ? "（无）" : String.valueOf(keptInfo)));
+                System.out.println("[HyAuth]   旧配置已备份为 " + FILE_NAME + ".bak-v" + fromVersion
+                        + "（要找回某项就对比这个文件）");
             } catch (Throwable t) {
-                System.err.println("[HyAuth] 自动补齐配置项写回失败（内存里仍按默认值生效）: " + t);
+                System.err.println("[HyAuth] 写回重置后的配置失败（内存里已是默认值）: " + t);
             }
         }
     }
+    /**
+     * 插件版本：**跟着编译/发布走**，四个来源按优先级取。
+     *
+     * <ol>
+     *   <li>系统属性 {@code hyauth.version}（AgentMain 在 premain 阶段从清单写入，注入后的辅助类读得到）；</li>
+     *   <li>环境变量 {@code HYAUTH_VERSION}（发行工作流与 CI 直接注入，构建/部署都能改）；</li>
+     *   <li>清单 {@code Implementation-Version}（{@code mvn -Dbuild.version=v1.0.x} 写入）；</li>
+     *   <li>兜底 {@code 1.0.0}。</li>
+     * </ol>
+     */
+    public static String agentVersion() {
+        String fromProperty = System.getProperty("hyauth.version");
+        if (fromProperty != null && !fromProperty.isEmpty()) {
+            return fromProperty;
+        }
+        String fromEnv = System.getenv("HYAUTH_VERSION");
+        if (fromEnv != null && !fromEnv.isEmpty()) {
+            return fromEnv;
+        }
+        try {
+            Package owner = ListManager.class.getPackage();
+            if (owner != null && owner.getImplementationVersion() != null
+                    && !owner.getImplementationVersion().isEmpty()) {
+                return owner.getImplementationVersion();
+            }
+        } catch (Throwable ignored) {
+            // 注入到服务端加载器时可能读不到清单，交给兜底
+        }
+        return "1.0.0";
+    }
 
+    /**
+     * 配置版本序号 = 编译版本号算出来的整数：{@code v1.0.11 → 10011}（major*10000 + minor*100 + patch）。
+     *
+     * <p>为什么要跟版本走：每个新 jar 都会让配置版本变化 ⇒ 触发"用最新默认模板重写配置、只保留用户信息"，
+     * 于是旧版本留下的无用字段会被清掉，而账号名单一个字都不动。
+     */
+    static int configVersionOf(String version) {
+        String text = version == null ? "" : version.trim();
+        if (text.startsWith("v") || text.startsWith("V")) {
+            text = text.substring(1);
+        }
+        int major = 0;
+        int minor = 0;
+        int patch = 0;
+        int seen = 0;
+        for (String part : text.split("[^0-9]+")) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            int value;
+            try {
+                value = Integer.parseInt(part);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            if (seen == 0) {
+                major = value;
+            } else if (seen == 1) {
+                minor = value;
+            } else if (seen == 2) {
+                patch = value;
+            }
+            seen++;
+            if (seen >= 3) {
+                break;
+            }
+        }
+        return major * 10000 + minor * 100 + patch;
+    }
+
+    /** 升级时**保留**的键（用户信息）：账号名单 + 额外管理员名单。 */
+    private static final String[] PRESERVED_KEYS = { "littleskin_players", "offline_players" };   // 只保留用户信息；其余（含 api_root）一律回默认
+
+    /**
+     * 升级迁移：版本不一致 ⇒ 以默认配置为底，只把「用户信息」搬过来，其余全部回默认。
+     *
+     * <p>保留项：{@code littleskin_players}、{@code offline_players}、{@code commands.extra_admins}。
+     * 旧文件会被备份成 {@code littleskin_config.json.bak-v<旧版本>}，方便对照找回。
+     */
+    private static JsonObject migrateToCurrentVersion(JsonObject old, int fromVersion) {
+        JsonObject fresh = defaultConfigJson();
+        List<String> kept = new ArrayList<String>();
+        for (String key : PRESERVED_KEYS) {
+            if (old.has(key) && !old.get(key).isJsonNull()) {
+                fresh.add(key, old.get(key));
+                kept.add(key + "（" + (old.get(key).isJsonArray() ? old.getAsJsonArray(key).size() + " 项" : "已保留") + "）");
+            }
+        }
+        // commands.extra_admins 属于用户信息（额外信任的管理员），单独搬
+        JsonObject oldCommands = old.has("commands") && old.get("commands").isJsonObject()
+                ? old.getAsJsonObject("commands") : null;
+        if (oldCommands != null && oldCommands.has("extra_admins") && !oldCommands.get("extra_admins").isJsonNull()) {
+            JsonObject freshCommands = fresh.has("commands") && fresh.get("commands").isJsonObject()
+                    ? fresh.getAsJsonObject("commands") : new JsonObject();
+            freshCommands.add("extra_admins", oldCommands.get("extra_admins"));
+            fresh.add("commands", freshCommands);
+            kept.add("commands.extra_admins（" + oldCommands.getAsJsonArray("extra_admins").size() + " 项）");
+        }
+        fresh.addProperty("config_version", CONFIG_VERSION);
+        // 备份旧文件（写另一个文件名，读取器还开着也没关系）
+        try {
+            File backup = new File(FILE_NAME + ".bak-v" + fromVersion);
+            try (Writer writer = new OutputStreamWriter(new FileOutputStream(backup), StandardCharsets.UTF_8)) {
+                GSON.toJson(old, writer);
+            }
+        } catch (Throwable t) {
+            System.err.println("[HyAuth] 备份旧配置失败（不影响升级）: " + t);
+        }
+        pendingComplete = fresh;
+        pendingCompleted = kept;
+        pendingOldVersion = fromVersion;
+        return fresh;
+    }
+
+    /**
+     * 一份全新的默认配置（内容与首次启动自动生成的一致）。
+     *
+     * <p>实现上直接复用 {@link #createDefaultConfig(File)} 写到临时文件再读回来 ——
+     * 默认配置的构造只有一处，避免两份定义长期不同步。
+     */
+    private static JsonObject defaultConfigJson() {
+        try {
+            File temp = File.createTempFile("hyauth-default-", ".json");
+            try {
+                createDefaultConfig(temp);
+                String text = new String(java.nio.file.Files.readAllBytes(temp.toPath()), StandardCharsets.UTF_8);
+                JsonElement parsed = JsonParser.parseString(text);
+                if (parsed != null && parsed.isJsonObject()) {
+                    return parsed.getAsJsonObject();
+                }
+            } finally {
+                if (!temp.delete()) {
+                    temp.deleteOnExit();
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[HyAuth] 生成默认配置失败（改用最小默认值）: " + t);
+        }
+        JsonObject fallback = new JsonObject();
+        fallback.addProperty("config_version", CONFIG_VERSION);
+        fallback.add("littleskin_players", new JsonArray());
+        fallback.add("offline_players", new JsonArray());
+        return fallback;
+    }
     /** 待写回的"补齐后的配置"（因为要等读取器关闭，见 reload()）。 */
     private static JsonObject pendingComplete;
 

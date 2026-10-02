@@ -231,7 +231,8 @@ public class ChatAdviceMain {
     /** 写测试配置（工作目录下的 littleskin_config.json）。 */
     private static void configure(boolean unsignedExternalChat, boolean unsignedAllChat) throws Exception {
         String json = "{\n"
-                + "  \"littleskin_players\": [ \"ExtPlayer\", \"ExtPlayer2\" ],\n"
+                + "  \"config_version\": -1," + "\n"
+                + "  \"littleskin_players\": [ \"ExtPlayer\", \"ExtPlayer2\" ]," + "\n"
                 + "  \"offline_players\": [],\n"
                 + "  \"api_root\": \"http://127.0.0.1:25588/api/yggdrasil\",\n"
                 + "  \"unsigned_external_chat\": " + unsignedExternalChat + ",\n"
@@ -241,6 +242,15 @@ public class ChatAdviceMain {
         File file = new File("littleskin_config.json");
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8)) {
             writer.write(json);
+        }
+    }
+    /** 写配置时用的版本号 = ListManager.CONFIG_VERSION（跟着编译版本走）。 */
+    private static int hyauthConfigVersion() {
+        try {
+            Class<?> type = Class.forName("com.hyauth.agent.config.ListManager");
+            return type.getField("CONFIG_VERSION").getInt(null);
+        } catch (Throwable t) {
+            return 10000;
         }
     }
 }

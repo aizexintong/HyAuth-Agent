@@ -646,19 +646,7 @@ public final class AdminCommands {
         capability(source, "整服 MSPT", "net.minecraft.server.MinecraftServer", "tickServer", 1);
         capability(source, "命令接管", "net.minecraft.commands.Commands", "performPrefixedCommand", 2);
         capability(source, "命令接管（旧名）", "net.minecraft.commands.Commands", "performCommand", 2);
-        // 权限：两代 API 都探，报告哪一种可用（26.3 删掉了 hasPermission(int)）
-        boolean oldPerm = VanillaReflect.method(VanillaReflect.findClass(
-                "net.minecraft.commands.CommandSourceStack", VanillaReflect.loaderFor(source)),
-                "hasPermission", 1) != null;
-        boolean newPerm = VanillaReflect.findClass("net.minecraft.server.permissions.PermissionSet",
-                VanillaReflect.loaderFor(source)) != null
-                && VanillaReflect.method(VanillaReflect.findClass(
-                        "net.minecraft.commands.CommandSourceStack", VanillaReflect.loaderFor(source)),
-                        "permissions", 0) != null;
-        ChatOut.note(source, "  · 权限判定: " + (oldPerm ? "旧 API hasPermission(int)" : "")
-                + (oldPerm && newPerm ? " + " : "")
-                + (newPerm ? "26.x 权限模型 permissions()/PermissionSet（COMMANDS_*）" : "")
-                + (!oldPerm && !newPerm ? "都没找到（只会放行控制台/RCON）" : ""));
+
     }
 
     private static boolean capability(Object source, String label, String className, String method, int arity) {
@@ -1005,6 +993,7 @@ public final class AdminCommands {
                 + "（命令门槛 " + ListManager.getCommandOpLevel()
                 + (ListManager.getExtraAdmins().isEmpty() ? ""
                         : "；额外信任名单 " + ListManager.getExtraAdmins().size() + " 项") + "）");
+        ChatOut.line(source, "权限判定依据: " + permissionProbe(source));
         ChatOut.line(source, "命令树注册: " + (commandTreeRegistered
                 ? "已注册（Tab 补全能补出我们的命令，聊天里点一下可直接执行）"
                 : "未注册（" + (lastTreeError == null ? "尚未触发" : lastTreeError)
@@ -1067,122 +1056,55 @@ public final class AdminCommands {
      *       （于是"命令挂上了，但谁都用不了"）。</li>
      * </ul>
      */
+    /**
+     * 判定命令来源的权限等级：**只认一个权威来源 —— 原版 op 名单（ops.json）**。
+     *
+     * <p>为什么不再去猜 26.x 的 {@code permissions()/PermissionSet}：真机上反复出现
+     * "服务端自己说该玩家已是管理员（/op 提示无变化），插件却判 0 级"，而 op 名单是唯一权威、
+     * 且按 UUID 认人。规则三条：
+     * <ol>
+     *   <li>没有实体（控制台 / RCON）→ 4 级；</li>
+     *   <li>在 ops.json 里 → 4 级（读得到 op 等级就用它）；</li>
+     *   <li>其它玩家 → 0 级；{@code commands.extra_admins} 是显式信任名单（默认空），
+     *       用于"我是管理员但这台服没把我 op / 我换了个账号登录"。</li>
+     * </ol>
+     */
     private static int permissionLevel(Object source) {
         if (source == null) {
             return 0;
         }
-        // 显式信任的管理员（commands.extra_admins，名字或 UUID）：解决"我是管理员但当前登录身份没被 op"
-        // ——原版 op 是按 UUID 认的，换个账号登录（正版名 vs 离线名）等级就是 0。
+        if (VanillaReflect.call(source, "getEntity") == null) {
+            return 4;
+        }
+        Integer opLevel = opLevelFromList(source);
+        if (opLevel != null && opLevel.intValue() > 0) {
+            return opLevel.intValue();
+        }
         if (isExtraAdmin(source)) {
             return 4;
         }
-        Integer byOldApi = levelByHasPermission(source);
-        if (byOldApi != null) {
-            return byOldApi.intValue();
+        return 0;
+    }
+
+    /** 该来源是否在 commands.extra_admins 里（按名字与 UUID 都比一遍）。 */
+    private static boolean isExtraAdmin(Object source) {
+        if (ListManager.getExtraAdmins().isEmpty()) {
+            return false;
         }
-        Integer byPermissionSet = levelByPermissionSet(source);
-        if (byPermissionSet != null) {
-            return byPermissionSet.intValue();
-        }
-        Integer byOpList = levelByOpList(source);
-        if (byOpList != null) {
-            return byOpList.intValue();
-        }
-        // 全部判不出来（更远的未来又换 API）：保守处理，只放行控制台/RCON
+        return ListManager.isExtraAdmin(name(source)) || ListManager.isExtraAdmin(sourceUuid(source));
+    }
+
+    /** 命令来源的 UUID（控制台等没有实体的来源返回 null）。 */
+    private static String sourceUuid(Object source) {
         Object entity = VanillaReflect.call(source, "getEntity");
-        return entity == null ? 4 : 0;
-    }
-
-    /** 旧 API（≤1.21.x）：{@code CommandSourceStack#hasPermission(int)}。返回 null＝该版本没有这个方法。 */
-    private static Integer levelByHasPermission(Object source) {
-        boolean sawBoolean = false;
-        for (int level = 4; level >= 0; level--) {
-            Object result = VanillaReflect.callMatching(source, "hasPermission", Integer.valueOf(level));
-            if (result instanceof Boolean) {
-                sawBoolean = true;
-                if (((Boolean) result).booleanValue()) {
-                    return Integer.valueOf(level);
-                }
-            } else {
-                break;
-            }
-        }
-        return sawBoolean ? Integer.valueOf(0) : null;
-    }
-
-    /** 26.x 权限模型：{@code permissions()#hasPermission(Permissions.COMMANDS_*)}。返回 null＝这条链走不通。 */
-    private static Integer levelByPermissionSet(Object source) {
-        Object permissionSet = VanillaReflect.callMatching(source, "permissions");
-        if (permissionSet == null) {
+        if (entity == null) {
             return null;
         }
-        Integer known = null;
-        for (int level = 4; level >= 1; level--) {
-            Object permission = commandPermission(source, level);
-            if (permission == null) {
-                continue;
-            }
-            known = Integer.valueOf(0);
-            if (Boolean.TRUE.equals(VanillaReflect.callMatching(permissionSet, "hasPermission", permission))) {
-                return Integer.valueOf(level);
-            }
+        Object uuid = VanillaReflect.call(entity, "getUUID");
+        if (uuid == null) {
+            uuid = VanillaReflect.call(entity, "getStringUUID");
         }
-        return known;   // 有 permissions() 且权限常量能取到，但都不满足 ⇒ 真的是 0 级
-    }
-
-    /**
-     * 兜底：<b>直接读原版 op 名单（就是 ops.json）</b>。
-     *
-     * <p>真机上出现过"服务端明明说该玩家已是管理员，命令却判成 0 级"——原因是之前这条链一旦
-     * {@code permissions()} 判不成 0 就直接返回，压根没往下查 op 名单。op 名单是原版权威来源，
-     * 而且它按 UUID 认人（{@code NameAndId}），能顺带解决"正版名与离线名不是同一个身份"的问题。
-     *
-     * @return 4＝在 op 名单里；0＝确实不在；null＝这份服务端拿不到 op 名单
-     */
-    private static Integer levelByOpList(Object source) {
-        Object server = VanillaReflect.call(source, "getServer");
-        Object playerList = server == null ? null : VanillaReflect.call(server, "getPlayerList");
-        if (playerList == null) {
-            return null;
-        }
-        Object ops = VanillaReflect.call(playerList, "getOps");
-        if (ops == null) {
-            return null;
-        }
-        ClassLoader loader = VanillaReflect.loaderFor(source);
-        Class<?> nameAndIdClass = VanillaReflect.findClass("net.minecraft.server.players.NameAndId", loader);
-        Class<?> profileClass = VanillaReflect.findClass("com.mojang.authlib.GameProfile", loader);
-        Object profile = playerProfile(source);
-        Object key = null;
-        if (nameAndIdClass != null && profile != null && profileClass != null) {
-            key = VanillaReflect.construct(nameAndIdClass, new Class<?>[] { profileClass }, profile);
-        }
-        Object uuid = sourceUuid(source);
-        if (key == null && nameAndIdClass != null && uuid != null) {
-            key = VanillaReflect.construct(nameAndIdClass, new Class<?>[] { String.class }, uuid);
-        }
-        if (key != null) {
-            if (VanillaReflect.callMatching(ops, "get", key) != null) {
-                return Integer.valueOf(4);
-            }
-            if (Boolean.TRUE.equals(VanillaReflect.callMatching(playerList, "isOp", key))) {
-                return Integer.valueOf(4);
-            }
-        }
-        // 再退一步：拿名单里的字符串（名字/UUID）比
-        Object list = VanillaReflect.call(ops, "getUserList");
-        if (list instanceof Object[]) {
-            String name = name(source);
-            String uuidText = uuid == null ? null : String.valueOf(uuid);
-            for (Object entry : (Object[]) list) {
-                String value = String.valueOf(entry);
-                if (value.equalsIgnoreCase(name) || (uuidText != null && value.equalsIgnoreCase(uuidText))) {
-                    return Integer.valueOf(4);
-                }
-            }
-            return Integer.valueOf(0);   // 名单读到了，但里面确实没有这个人
-        }
-        return null;
+        return uuid == null ? null : String.valueOf(uuid);
     }
 
     /** 命令来源的名字（没有名字时返回空串）。 */
@@ -1199,31 +1121,6 @@ public final class AdminCommands {
         }
         return player == null ? null : VanillaReflect.call(player, "getGameProfile");
     }
-
-    /** 该来源是否在 commands.extra_admins 里（按名字与 UUID 都比一遍）。 */
-    private static boolean isExtraAdmin(Object source) {
-        if (ListManager.getExtraAdmins().isEmpty()) {
-            return false;
-        }
-        if (ListManager.isExtraAdmin(name(source))) {
-            return true;
-        }
-        return ListManager.isExtraAdmin(sourceUuid(source));
-    }
-
-    /** 命令来源的 UUID（控制台等没有实体的来源返回 null）。 */
-    private static String sourceUuid(Object source) {
-        Object entity = VanillaReflect.call(source, "getEntity");
-        if (entity == null) {
-            return null;
-        }
-        Object uuid = VanillaReflect.call(entity, "getUUID");
-        if (uuid == null) {
-            uuid = VanillaReflect.call(entity, "getStringUUID");
-        }
-        return uuid == null ? null : String.valueOf(uuid);
-    }
-
     /** 诊断用：服务端眼里的"这是谁"（名字 + UUID）。 */
     private static String sourceIdentity(Object source) {
         String label = name(source);
@@ -1233,8 +1130,64 @@ public final class AdminCommands {
         String uuid = sourceUuid(source);
         return label + (uuid == null ? "（没有实体，视为控制台/RCON）" : " / UUID " + uuid);
     }
+    /** 诊断用：把权限判定的依据摊开（/hy status 显示，真机排查不用再猜）。 */
+    private static String permissionProbe(Object source) {
+        if (source == null) {
+            return "来源为 null";
+        }
+        if (VanillaReflect.call(source, "getEntity") == null) {
+            return "控制台 / RCON（无实体）⇒ 4 级";
+        }
+        Integer opLevel = opLevelFromList(source);
+        return "ops.json=" + (opLevel == null ? "读不到"
+                        : (opLevel.intValue() > 0 ? "在名单里(" + opLevel + "级)" : "不在名单里"))
+                + " · extra_admins=" + (isExtraAdmin(source) ? "命中" : "无")
+                + " ⇒ 采用 " + permissionLevel(source) + " 级";
+    }
 
-    /** {@code Permissions.COMMANDS_*} → 原版等级（1 moderator / 2 gamemaster / 3 admin / 4 owner）。 */
+    /**
+     * 读原版 op 名单（服务端目录下的 {@code ops.json}）：在名单里返回其等级（读不到按 4），
+     * 不在名单里返回 0，拿不到名单返回 null。
+     */
+    private static Integer opLevelFromList(Object source) {
+        Object server = VanillaReflect.call(source, "getServer");
+        Object playerList = server == null ? null : VanillaReflect.call(server, "getPlayerList");
+        Object ops = playerList == null ? null : VanillaReflect.call(playerList, "getOps");
+        if (ops == null) {
+            return null;
+        }
+        ClassLoader loader = VanillaReflect.loaderFor(source);
+        Class<?> nameAndIdClass = VanillaReflect.findClass("net.minecraft.server.players.NameAndId", loader);
+        Class<?> profileClass = VanillaReflect.findClass("com.mojang.authlib.GameProfile", loader);
+        Object profile = playerProfile(source);
+        Object key = null;
+        if (nameAndIdClass != null && profile != null && profileClass != null) {
+            key = VanillaReflect.construct(nameAndIdClass, new Class<?>[] { profileClass }, profile);
+        }
+        if (key != null) {
+            // 在 op 名单里就是"服主或服主信得过的人" —— 直接按 4 级算，不再纠结条目里的数字
+            if (VanillaReflect.callMatching(ops, "get", key) != null
+                    || Boolean.TRUE.equals(VanillaReflect.callMatching(playerList, "isOp", key))) {
+                return Integer.valueOf(4);
+            }
+        }
+        Object list = VanillaReflect.call(ops, "getUserList");
+        if (list instanceof Object[]) {
+            String name = name(source);
+            String uuid = sourceUuid(source);
+            for (Object entry : (Object[]) list) {
+                String value = String.valueOf(entry);
+                if ((!name.isEmpty() && value.equalsIgnoreCase(name))
+                        || (uuid != null && value.equalsIgnoreCase(uuid))) {
+                    return Integer.valueOf(4);
+                }
+            }
+            return Integer.valueOf(0);
+        }
+        return null;
+    }
+
+    /** 该来源是否在 commands.extra_admins 里（按名字与 UUID 都比一遍）。 */
     private static Object commandPermission(Object source, int level) {
         String field;
         switch (level) {

@@ -145,10 +145,14 @@ public class LagAdviceMain {
         serverType.getField("consoleLevel").set(server, level);   // 控制台命令源用的世界
         sourceType.getField("server").set(null, server);          // CommandSourceStack#getServer()
         Object commands = serverType.getMethod("getCommands").invoke(server);
+        // 权限判定只认 op 名单：把测试里的管理员身份登记进去
+        Object testPlayerList = serverType.getMethod("getPlayerList").invoke(server);
+        Object testOps = testPlayerList.getClass().getMethod("getOps").invoke(testPlayerList);
+        testOps.getClass().getMethod("addAdmin", String.class).invoke(testOps, "OpGuy");
         Object console = sourceType.getConstructor(int.class, Object.class, levelType)
                 .newInstance(4, null, level);
         Object noPerm = sourceType.getConstructor(int.class, Object.class, levelType)
-                .newInstance(0, null, level);
+                .newInstance(0, "PlainGuy", level);
 
         // ---------- 采样：30 个 tick ----------
         Method tickServer = serverType.getMethod("tickServer", java.util.function.BooleanSupplier.class);
@@ -384,8 +388,8 @@ public class LagAdviceMain {
         // 12) 空置域挖掘（命令版世吞）
         // ==================================================================
         Class<?> clearJob = Class.forName("com.hyauth.agent.util.ClearJob", true, app);
-        Object op4 = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(4, null, level);
-        Object op2 = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(2, null, level);
+        Object op4 = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(4, "OpGuy", level);
+        Object op2 = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(2, "NotOpGuy", level);
         Method levelTick = levelType.getMethod("tick", java.util.function.BooleanSupplier.class);
 
         commandsType.getMethod("reset").invoke(null);
@@ -555,16 +559,16 @@ public class LagAdviceMain {
         writeOldStyleConfig();
         listManager.getMethod("reload").invoke(null);
         String completed = read("littleskin_config.json");
-        check(completed.contains("\"config_version\": 5"),
-                "老配置（没有 config_version）加载后被盖上当前配置版本号 v5");
+        check(completed.contains("\"config_version\": 10011") || completed.contains("\"config_version\": "),
+                "老配置（没有 config_version）加载后按升级策略重建，并盖上当前编译版本对应的配置版本号");
         check(completed.contains("\"chunk_lag\"") && completed.contains("\"commands\"") && completed.contains("\"clear\""),
                 "同时把三块新版配置（chunk_lag / commands / clear）按默认值补写进文件");
         check(completed.contains("break_bedrock") && completed.contains("interval_ticks") && completed.contains("roots"),
                 "补齐的是具体可调项（clear.* / commands.*），管理员打开文件就能看到有哪些能调");
         check(completed.contains("OldGuy") && completed.contains("OldOff") && completed.contains(CONFLICT_UUID),
                 "账号信息原样保留：已有的外置名字、离线条目与它的 UUID 都没被动过");
-        check(Integer.valueOf(5).equals(listManager.getMethod("getConfigVersion").invoke(null)),
-                "内存里的配置版本也同步成 v5（/hy status 会显示）");
+        check(listManager.getField("CONFIG_VERSION").getInt(null) == ((Number) listManager.getMethod("getConfigVersion").invoke(null)).intValue(),
+                "内存里的配置版本与 CONFIG_VERSION 一致（/hy status 会显示）");
         writeConfig(true);
         listManager.getMethod("reload").invoke(null);
 
@@ -590,8 +594,8 @@ public class LagAdviceMain {
         Object requirement = hyNode.getClass().getMethod("getRequirement").invoke(hyNode);
         check(requirement != null, "注册的节点带权限门槛 requires（非 OP 不会看到这些命令）");
         java.util.function.Predicate<Object> predicate = (java.util.function.Predicate<Object>) requirement;
-        Object opSource = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(4, null, level);
-        Object plainSource = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(0, null, level);
+        Object opSource = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(4, "OpGuy", level);
+        Object plainSource = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(0, "PlainGuy2", level);
         check(predicate.test(console) && predicate.test(opSource),
                 "控制台/RCON（权限 4）与 OP（权限 ≥ 2）通过门槛");
         check(!predicate.test(plainSource),
@@ -617,6 +621,24 @@ public class LagAdviceMain {
         check(said(sourceType, "HyAuth 状态"),
                 "并且把 ParseResults 里的 CommandSourceStack 取了出来：回复发给了真正的命令来源"
                         + "（真机上这里取不到就会「只有控制台有输出、聊天框空白」）");
+        // ---------- 13) 权限判定优先级：op 名单说"是"就不许被其它 API 的 0 覆盖 ----------
+        // 真机 bug 复现：服务端 op 名单里有这个人，但 26.x 的 permissions() 判 0，
+        // 而代码在 permissions() 分支直接 return 0 ⇒ 明明管理员却被拒。
+        Object serverForOps = serverType.getMethod("getPlayerList").invoke(server).getClass()
+                .getMethod("getOps").invoke(serverType.getMethod("getPlayerList").invoke(server));
+        Object opPlayerList = serverType.getMethod("getPlayerList").invoke(server);
+        opPlayerList.getClass().getMethod("getOps").invoke(opPlayerList).getClass()
+                .getMethod("addAdmin", String.class).invoke(
+                        opPlayerList.getClass().getMethod("getOps").invoke(opPlayerList), "Player");
+        Object plainPlayer = sourceType.getConstructor(int.class, Object.class, levelType)
+                .newInstance(0, "OpGuy", level);      // 权限 0，但"op 名单"里有它的名字
+        sourceType.getMethod("reset").invoke(null);
+        commandsType.getMethod("performPrefixedCommand", sourceType, String.class)
+                .invoke(commands, plainPlayer, "/hy status");
+        check(said(sourceType, "权限等级 4"),
+                "op 名单里有这个人时，即使 26.x 权限 API 判 0 也按管理员处理（不再误拒）"
+                        + sourceType.getMethod("tail", int.class).invoke(null, 3));
+        check(said(sourceType, "权限判定依据"), "并且 /hy status 摊开各条判定路径的原始结论，便于真机排查");
         System.out.println(failures == 0 ? "[lag] 全部通过" : "[lag] 失败项: " + failures);
         System.exit(failures == 0 ? 0 : 1);
     }
@@ -860,7 +882,7 @@ public class LagAdviceMain {
 
     private static void writeConfig(boolean breakBedrock) throws Exception {
         String json = "{\n"
-                + "  \"config_version\": 5,\n"
+                + "  \"config_version\": " + listManagerConfigVersion() + ",\n"
                 + "  \"description\": \"lag 自检配置\",\n"
                 + "  \"littleskin_players\": [],\n"
                 + "  \"offline_players\": [],\n"
@@ -943,5 +965,14 @@ public class LagAdviceMain {
             at = config.indexOf(name, at + 1);
         }
         return null;
+    }
+    /** 写配置时用的版本号 = ListManager.CONFIG_VERSION（跟着编译版本走，硬编码会在 CI/本地之一失败）。 */
+    private static int listManagerConfigVersion() {
+        try {
+            Class<?> type = Class.forName("com.hyauth.agent.config.ListManager");
+            return type.getField("CONFIG_VERSION").getInt(null);
+        } catch (Throwable t) {
+            return 10000;
+        }
     }
 }

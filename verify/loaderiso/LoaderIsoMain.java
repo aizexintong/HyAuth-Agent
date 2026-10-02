@@ -406,7 +406,8 @@ public class LoaderIsoMain {
     /** 重写测试配置，用于验证开关的两种行为。 */
     private static void writeConfig(boolean relaxChatKeys) throws Exception {
         String json = "{\n"
-                + "  \"littleskin_players\": [],\n"
+                + "  \"config_version\": -1," + "\n"
+                + "  \"littleskin_players\": []," + "\n"
                 + "  \"offline_players\": [ { \"name\": \"OfflinePlayer\", "
                 + "\"uuid\": \"99998888-7777-6666-5555-444433332222\" } ],\n"
                 + "  \"api_root\": \"http://127.0.0.1:25588/api/yggdrasil\",\n"
@@ -466,6 +467,15 @@ public class LoaderIsoMain {
             return target.getClass().getMethod(name).invoke(target);
         } catch (Throwable ignored) {
             return null;
+        }
+    }
+    /** 写配置时用的版本号 = ListManager.CONFIG_VERSION（跟着编译版本走）。 */
+    private static int hyauthConfigVersion() {
+        try {
+            Class<?> type = Class.forName("com.hyauth.agent.config.ListManager");
+            return type.getField("CONFIG_VERSION").getInt(null);
+        } catch (Throwable t) {
+            return 10000;
         }
     }
 }

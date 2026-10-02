@@ -7,6 +7,13 @@ import java.util.function.BooleanSupplier;
 /** 替身：服务端主类（{@code tickServer} 是整服 MSPT 的切点）。 */
 public class MinecraftServer {
 
+    /** 替身：op 名单挂在这里（真实类同样通过 getPlayerList() 拿到）。 */
+    public final net.minecraft.server.players.PlayerList playerList = new net.minecraft.server.players.PlayerList();
+
+    public net.minecraft.server.players.PlayerList getPlayerList() {
+        return playerList;
+    }
+
     /** 每次 tickServer 的"耗时"（毫秒），测试可调。 */
     public long tickSleepMs;
 

@@ -774,3 +774,19 @@ verify/                    四套离线自检 + 真机切点核对（verify/real
 ```
 
 ---
+
+---
+
+## 升级策略（重要）
+
+**每次换新 jar，配置文件都会用"当前版本的最新默认模板"重写一遍**，只保留用户信息 —— 这样旧版本留下的
+无用/过期字段不会残留、也不会因为旧值造成奇怪问题。
+
+* **保留（用户信息）**：`littleskin_players`、`offline_players`、`commands.extra_admins`；
+* **其余一律回到默认值**（默认值就是"所有功能开箱即用"的那套；要改成自定义请在重写之后再改）；
+* 旧文件会**备份**成 `littleskin_config.json.bak-v<旧版本>`，要找回某一项就对比它；
+* 触发条件：文件里的 `config_version` 与当前 jar 的版本序号不一致；
+* **`config_version` 跟着编译版本走**：版本序号 = `major*10000 + minor*100 + patch`（`v1.0.11` → `10011`）。
+  版本来源优先级：系统属性 `hyauth.version` → 环境变量 `HYAUTH_VERSION` → jar 清单 `Implementation-Version`
+  → 兜底 `1.0.0`。也就是说**发一个新版本号，配置就会自动按新模板重写一次**，不需要你手动删文件。
+* 特殊约定：`config_version: -1` 表示"不要重置"（自检脚本用；正式配置不要这么写）。

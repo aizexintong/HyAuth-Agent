@@ -58,6 +58,16 @@ if ($stillMissing.Count -gt 0) {
 
 # ---------- 3. 准备 Agent 包 ----------
 $agent = Join-Path $root "target\HyAuth-Agent-1.0.0.jar"
+# 写测试配置时用的 config_version 必须等于 jar 里的 CONFIG_VERSION（它跟着编译版本走），
+# 否则会被升级策略当成"旧配置"整体重置。这里用 javap -constants 直接读出来。
+$configVersion = "10000"
+if (Test-Path $agent) {
+    $javap = if ($JavaHome -and (Test-Path (Join-Path $JavaHome "bin\javap.exe"))) { Join-Path $JavaHome "bin\javap.exe" } else { "javap" }
+    $line = & $javap -p -constants -cp $agent com.hyauth.agent.config.ListManager 2>$null |
+        Select-String -Pattern "CONFIG_VERSION = (\d+)" | Select-Object -First 1
+    if ($line -and $line.Matches.Count -gt 0) { $configVersion = $line.Matches[0].Groups[1].Value }
+}
+Write-Host "[deps] config_version = $configVersion"
 if (-not (Test-Path $agent)) {
     Write-Host "[verify] 未找到 $agent，尝试执行 mvn package ..."
     Push-Location $root
@@ -94,6 +104,7 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 # ---------- 5. 写入测试配置 ----------
 $config = @"
 {
+  "config_version": -1,
   "description": "HyAuth-Agent 自检配置",
   "littleskin_players": [
     "WhitelistPlayer",
@@ -155,6 +166,7 @@ New-Item -ItemType Directory -Force -Path $hot | Out-Null
 function Write-HotConfig([string]$players) {
     $json = @"
 {
+  "config_version": -1,
   "description": "hot reload test",
   "littleskin_players": [ $players ],
   "api_root": "http://127.0.0.1:$Port/api/yggdrasil",
