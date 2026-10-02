@@ -19,7 +19,11 @@ $verify = $PSScriptRoot
 
 $java = if ($JavaHome -and (Test-Path (Join-Path $JavaHome "bin\java.exe"))) { Join-Path $JavaHome "bin\java.exe" } else { "java" }
 $javac = if ($JavaHome -and (Test-Path (Join-Path $JavaHome "bin\javac.exe"))) { Join-Path $JavaHome "bin\javac.exe" } else { "javac" }
-Write-Host "[loaderiso] java = $java"
+Write-Host "[loaderiso] PowerShell = $($PSVersionTable.PSVersion) （$($PSVersionTable.PSEdition)）"
+Write-Host "[loaderiso] java  = $java"
+Write-Host "[loaderiso] javac = $javac"
+try { Write-Host "[loaderiso] java 版本 = $((& $java -version 2>&1 | Select-Object -First 1))" } catch { Write-Host "[loaderiso] 无法执行 java：$($_.Exception.Message)" }
+try { Write-Host "[loaderiso] javac 版本 = $((& $javac -version 2>&1 | Select-Object -First 1))" } catch { Write-Host "[loaderiso] 无法执行 javac：$($_.Exception.Message)" }
 
 # ---------- 依赖 ----------
 $libs = Join-Path $verify "libs"
@@ -32,13 +36,21 @@ $deps = @(
     @{ Path = "commons-io-2.11.0.jar";  Url = "https://repo1.maven.org/maven2/commons-io/commons-io/2.11.0/commons-io-2.11.0.jar" }
 )
 New-Item -ItemType Directory -Force -Path $libs | Out-Null
-foreach ($dep in $deps) {
-    $target = Join-Path $libs $dep.Path
-    if (-not (Test-Path $target)) {
-        Write-Host "[loaderiso] 下载依赖 $($dep.Path)"
-        & $java (Join-Path $verify "tools\Fetch.java") $dep.Url $target
-        if ($LASTEXITCODE -ne 0) { Write-Host "[loaderiso] 依赖下载失败: $($dep.Url)"; exit 1 }
-    }
+# 先把所有缺的都下完再统一校验：某个仓库偶发 5xx 时不会让整套自检白挂一次
+# （Fetch.java 内部已做 3 次重试 + Mojang 官方仓库失败自动换 Maven Central 镜像）
+$need = @($deps | Where-Object { -not (Test-Path (Join-Path $libs $_.Path)) })
+foreach ($dep in $need) {
+    Write-Host "[loaderiso] 下载依赖 $($dep.Path)"
+    & $java (Join-Path $verify "tools\Fetch.java") $dep.Url (Join-Path $libs $dep.Path)
+}
+$stillMissing = @($deps | Where-Object {
+    $f = Join-Path $libs $_.Path
+    (-not (Test-Path $f)) -or ((Get-Item $f).Length -eq 0)
+})
+if ($stillMissing.Count -gt 0) {
+    Write-Host "[loaderiso] 依赖下载失败: " + (($stillMissing | ForEach-Object { $_.Path }) -join ', ')
+    Write-Host "[loaderiso] 请确认能访问 libraries.minecraft.net / repo1.maven.org，或手动把 jar 放进 verify/libs 后重跑"
+    exit 1
 }
 
 # ---------- Agent 包 ----------

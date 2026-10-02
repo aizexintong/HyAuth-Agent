@@ -34,7 +34,11 @@ if (-not (Test-Path $gson)) {
     Write-Host "[chat] 下载依赖 gson-2.10.1.jar"
     & $java (Join-Path $verify "tools\Fetch.java") `
         "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar" $gson
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $gson)) { Write-Host "[chat] 依赖下载失败"; exit 1 }
+    # Fetch.java 内部已重试 3 次并自动换镜像；这里再确认一次产物非空
+    if (-not (Test-Path $gson) -or (Get-Item $gson).Length -eq 0) {
+        Write-Host "[chat] 依赖下载失败（gson）；请检查网络或手动放进 verify/libs"
+        exit 1
+    }
 }
 
 # ---------- Agent 包 ----------
