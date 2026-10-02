@@ -54,7 +54,7 @@ jobs:
           $hash = (Get-FileHash $jar.FullName -Algorithm SHA256).Hash.ToLower()
           "大小  : $($jar.Length) 字节"
           "SHA256: $hash"
-          Add-Content -Path BUILD.txt -Value "`n本次 CI 构建: $hash"
+          Add-Content -Path BUILD.txt -Value "`n（本次 CI 构建仅记录在日志里，不入库）SHA256: $hash"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4

@@ -175,7 +175,8 @@ target/HyAuth-Agent-1.0.0.jar            ← 拿去用（已内置 Byte Buddy）
 target/original-HyAuth-Agent-1.0.0.jar   ← 未打包依赖的原始 jar，不要用
 ```
 
-每次构建的大小与 SHA256 记录在项目根目录 `BUILD.txt` 里。首次构建需要联网下依赖（约 2~12 分钟），之后增量约 5 秒，
+每次构建的大小与 SHA256 记录在项目根目录 `BUILD.txt` 里（**发行页上的 SHA256 才是官方值**；本机自构建的哈希
+因为时间戳不同必然不一样，不代表文件损坏）。首次构建需要联网下依赖（约 2~12 分钟），之后增量约 5 秒，
 完全离线可用 `mvn -o clean package`。
 
 ### 3.2 GitHub Actions：自动构建 + 自动发行
@@ -719,7 +720,7 @@ CI（`.github/workflows/ci.yml`）在 Java 25 + Windows 上跑的就是这四套
 ```text
 README.md                  本文档
 LICENSE                    GPL-3.0-or-later 全文
-BUILD.txt                  各次构建的大小 / SHA256 / 变更记录
+BUILD.txt                  版本变化 + 功能总览 + 自检清单 + 怎么核对产物哈希（发行时 CI 会在末尾追加当次构建记录）
 pom.xml                    Maven 构建（Byte Buddy 1.17.5，--release 8，shade 打包）
 build.bat / build.sh       一键构建（自带 Maven 时自动使用项目内那份）
 start.bat / start.sh       启动脚本（含必须的 --add-opens 与 -javaagent）

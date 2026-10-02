@@ -133,8 +133,17 @@ jobs:
           "size=$size"       >> $env:GITHUB_OUTPUT
           "jar=target/HyAuth-Agent-$version.jar" >> $env:GITHUB_OUTPUT
 
-          "`n$version（GitHub Actions 构建，run ${{ github.run_number }}）" | Add-Content -Path BUILD.txt
-          "SHA256  $hash" | Add-Content -Path BUILD.txt
+          # 把"这次发行构建"的信息追加进 BUILD.txt：这样资产里的 BUILD.txt 末尾就是
+          # 与 HyAuth-Agent-1.0.0.jar 同字节的哈希，不会再和文件头部的本机构建记录打架。
+          Add-Content -Path BUILD.txt -Value "========================================================="
+          Add-Content -Path BUILD.txt -Value "本次发行构建记录（GitHub Actions，run ${{ github.run_number }}）"
+          Add-Content -Path BUILD.txt -Value "  版本   : $version"
+          Add-Content -Path BUILD.txt -Value "  提交   : ${{ github.sha }}"
+          Add-Content -Path BUILD.txt -Value "  大小   : $size 字节"
+          Add-Content -Path BUILD.txt -Value "  SHA256 : $hash"
+          Add-Content -Path BUILD.txt -Value "  对应资产: HyAuth-Agent-1.0.0.jar（与 HyAuth-Agent-$version.jar 同字节）"
+          Add-Content -Path BUILD.txt -Value "  自检   : verify/loaderiso.ps1 · verify/chat.ps1 · verify/lag.ps1 · verify/verify.ps1 全部通过"
+          Add-Content -Path BUILD.txt -Value "========================================================="
 
           "版本   : $version"
           "大小   : $size 字节"
