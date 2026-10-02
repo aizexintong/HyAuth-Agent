@@ -47,8 +47,24 @@ public class CommandSourceStack {
         return entity == null ? "Server" : "Player";
     }
 
-    public boolean hasPermission(int level) {
-        return permission >= level;
+    /**
+     * 26.3 的真实权限入口：{@code permissions()} 返回 {@code PermissionSet}，
+     * 用 {@code Permissions.COMMANDS_*} 判等级。
+     *
+     * <p>注意替身里<b>故意不提供</b> {@code hasPermission(int)} —— 26.3 已经删掉它了，
+     * 留着会让"只走旧路径"的实现照样自检通过（v1.0.6 就是这么在真机上翻车的）。
+     */
+    public net.minecraft.server.permissions.PermissionSet permissions() {
+        final int level = permission;
+        return new net.minecraft.server.permissions.PermissionSet() {
+            @Override
+            public boolean hasPermission(net.minecraft.server.permissions.Permission permission) {
+                if (permission instanceof net.minecraft.server.permissions.Permissions.Level) {
+                    return level >= ((net.minecraft.server.permissions.Permissions.Level) permission).commandLevel;
+                }
+                return false;
+            }
+        };
     }
 
     public Object getEntity() {

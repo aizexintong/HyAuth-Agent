@@ -225,6 +225,34 @@ public final class VanillaReflect {
         return target != null && matchMethod(target.getClass(), name, args) != null;
     }
 
+    /**
+     * 调用并回答"到底调成了没有" —— 专门解决 <b>void 方法</b>的判断问题。
+     *
+     * <p>为什么需要：26.x 的 {@code Commands#performPrefixedCommand} 返回 {@code void}，
+     * 反射调用成功拿到的也是 {@code null}，所以 {@code result != null} 这种写法会把
+     * "调用成功"误判成"失败"。v1.0.6 因此让空置域挖掘在真机上刚开就报"命令派发失败"。
+     *
+     * @return 找到方法且调用没有抛异常 = {@code true}；找不到方法或抛异常 = {@code false}
+     */
+    public static boolean callMatchingQuietly(Object target, String name, Object... args) {
+        if (target == null) {
+            return false;
+        }
+        Method method = matchMethod(target.getClass(), name, args);
+        if (method == null) {
+            return false;
+        }
+        try {
+            if (!method.isAccessible()) {
+                method.setAccessible(true);
+            }
+            method.invoke(target, args);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static Method matchMethod(Class<?> owner, String name, Object[] args) {
         Class<?>[] argTypes = new Class<?>[args == null ? 0 : args.length];
         for (int i = 0; i < argTypes.length; i++) {

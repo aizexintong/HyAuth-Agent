@@ -16,29 +16,32 @@ HyAuth-Agent 构建与发行记录
 3. 升级只需替换 jar 并重启服务端；**配置文件不用动** ——
    新版本会自动补齐新增的配置项（只新增，账号信息与已有值原样保留，见 README 第五章）。
 
-最近一次发行：v1.0.5
+最近一次发行：v1.0.7
 ---------------------------------------------------------
 （push 到 main 即自动递增发行版号并发布，详情见 Release 页与 README）
 
 这一版新增 / 修复：
-  · 配置文件版本校对 + 自动补齐
-      - 配置文件带 config_version（当前 v4：v1 鉴权 / v2 聊天开关 / v3 勘探+命令 / v4 空置域挖掘）
-      - 文件版本低于插件支持版本 → 自动补齐缺失项（按默认值写回）并盖上 v4
-      - 账号信息（littleskin_players / offline_players）与已有配置值**一律原样保留**
-      - 文件版本高于支持版本 → 只读不写，避免把新字段抹掉
-      - /hy status 显示配置文件版本；写回用"临时文件 + 原子替换"，且等读取器关闭后再做（Windows 兼容）
-  · 命令语义收敛 —— 不再需要管理员手抄 UUID
-      /hy add off <名字…>        先查户口：有历史身份（usercache / 存档 / 原版离线算法）就沿用，
-                                 没有才发新 UUIDv7 并查重
-      /hy off <名字…> force      唯一会"换人"的一条：给新 UUIDv7，并警告老存档不跟过去
-      /hy del <名字…>            按名字删（名字唯一，不分外置/离线）
-      去掉了没有意义的"手填 UUID"写法（/hy off <名字> <uuid>、/hy add off <名字> <uuid>）与 +/− 别名
-  · README 整篇重写（2008 行 → 479 行）：文首即**命令汇总表**与 **GPL-3.0-or-later** 声明
-  · CI / Release 改用 Java 25（与服务端运行时一致）
-  · 修掉一个让 CI 必挂的坑：.gitignore 里 `world/` 没锚定到仓库根，
-    把自检替身 verify/lag/net/minecraft/world/** 下 4 个文件（Entity / ChunkPos / LevelChunk / Heightmap）
-    静默忽略了 —— 本地有文件所以自检照过，CI 检出后缺文件、javac 秒级失败。
-    现在运行时目录规则全部锚定（/world/、/logs/、/libraries/ …）并加了兜底规则。
+  · ★ 修掉三个"真机才暴露"的静默失效（离线自检当时全绿、真机上功能整块不工作）
+      1) 命令入口：26.3 的 Commands#performPrefixedCommand / performCommand 返回 **void**，
+         而切面匹配器要求 int ⇒ 一个方法都没匹配上，所有 /hy 命令落到原版报"未知或不完整的命令"。
+         现在按 void / int / boolean 三种返回类型分别挂切面（CommandAdviceVoid / CommandAdvice /
+         CommandAdviceBoolean）。
+         教训：日志里的"命中命令系统 / 已改写目标类字节码"在方法匹配为空时也会打印，不能当成功证据。
+      2) 权限判定：26.3 删掉了 CommandSourceStack#hasPermission(int)，改成 permissions() →
+         PermissionSet#hasPermission(Permission)（Permissions.COMMANDS_MODERATOR/GAMEMASTER/ADMIN/OWNER
+         对应等级 1~4）。只走旧路径会把所有人判成 0 级 ⇒ 命令挂上了却"权限不足"。现在两条路径都试。
+      3) 方块实体 tick：26.3 已移除 LevelChunk#tickBlockEntities()，改为 Level#tickBlockEntities()
+         维度级遍历 TickingBlockEntity。原来那个切点恒为 0；现在挂 TickingBlockEntity#tick()，
+         再用 getPos() 反推区块，保住"按区块"的归因粒度（老版本仍保留旧切点）。
+      · 同族问题：内部派发命令（勘探传送、空置域挖掘的 /fill）原来用"反射返回值 != null"判断成功，
+        而 void 方法成功也返回 null ⇒ 挖掘任务在真机上刚开就报"命令派发失败"。
+        现在统一用 VanillaReflect.callMatchingQuietly（方法找得到且调用没抛异常才算成功）。
+  · 新增 verify/realjar.ps1：**真机切点核对** —— 直接反编译你的 server.jar（Bundler 自动拆内层 jar +
+    META-INF/libraries 里的 authlib），逐个核对切点的方法名/参数个数/返回类型与权限 API，20 项。
+    这是唯一能防住"日志说已改写、功能却整块失效"的检查，换服务端版本后建议跑一次。
+  · 离线自检的替身类改成与真实 26.3 一致的形状（命令入口 void、权限走 PermissionSet、
+    替身里故意不提供 hasPermission(int)），这样上面这类"假绿"以后会被自检直接抓住。
+  · README 增补「26.x 的真实 API」一节，把这三处差异与判断方法写清。
 
 功能总览（一个 jar，纯服务端，不用插件 / 不用客户端 Mod）
 ---------------------------------------------------------
@@ -63,7 +66,9 @@ HyAuth-Agent 构建与发行记录
 
 版本历史
 ---------------------------------------------------------
-  v1.0.5  配置版本校对与自动补齐；命令语义收敛（沿用 / force）；README 重写；CI 用 Java 25
+  v1.0.7  修掉三个真机静默失效（命令入口 void / 26.x 权限模型 / 方块实体切点）+ 真机核对脚本
+  v1.0.6  BUILD.txt 精简并与发行版对齐；依赖下载重试与镜像兜底；CI 用 Java 25
+  v1.0.5  配置版本校对与自动补齐；命令语义收敛（沿用 / force）；README 重写
   v1.0.4  区块卡顿勘探 + 管理员命令（UUIDv7 名单）+ 空置域挖掘；改用 GPL-3.0-or-later
   v1.0.3  第一个正式发行版：三合一登录 / 鉴权分流（正版 + 外置 + 离线名单同服）
   v1.0.2  修掉"外置玩家自己看不到自己发的消息"（逐接收者分流）
@@ -72,8 +77,8 @@ HyAuth-Agent 构建与发行记录
 本机构建记录（仅供参考，官方哈希见发行页）
 ---------------------------------------------------------
   环境    : Microsoft OpenJDK 25.0.1 + Apache Maven 3.9.9，--release 8，shade 打包
-  大小    : 9,118,377 字节
-  SHA256  : 1eff4278e5d9d5cbcf2ee9d8ecf62e9fecf21d89554283eb8382f4e24d316d29
+  大小    : 9,123,279 字节
+  SHA256  : 3ecc54ea8faecc1b11433c0f57336d20ffd870eb6be5d2e4aae1c09d0fce7836
 
 =========================================================
 （以下由 GitHub Actions 在发行时追加）

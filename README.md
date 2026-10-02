@@ -128,7 +128,8 @@ HyAuth-Agent 只接管一件事：**服务端"这个玩家到底是谁"的那一
 | Authlib 10.0.77 / 6.0.54 / 3.11.49 三代（各 20/20 断言） | ✅ 实测 |
 | 真实客户端登录：正版号（零 `[HyAuth]` 输出）、离线名单玩家、LittleSkin 外置号 | ✅ 实测 |
 | 外置账号聊天（皮肤站公钥验签通过）+ 逐接收者分流（`verify/chat.ps1`，11/11） | ✅ 实测 / 离线回归 |
-| 区块卡顿勘探 + 管理员命令 + 空置域挖掘（`verify/lag.ps1`，83 项断言） | ✅ 离线回归（真实切面 + 26.x 形状替身） |
+| 区块卡顿勘探 + 管理员命令 + 空置域挖掘（`verify/lag.ps1`，83 项断言 + 替身与 26.3 真实形状一致） | ✅ 离线回归（真实切面 + 26.x 形状替身） |
+| 26.3 真实 server.jar 上的切点签名（`verify/realjar.ps1`，20 项） | ✅ 实测（对你的 26.3 官方 server.jar 逐条核对） |
 | 勘探 / 挖掘在**真实存档**上的表现 | ⚠️ 待你在测试存档上验一次 |
 | MC 1.20.x 及更早的离线握手改写 | ⚠️ 未实现（这些版本类名混淆，需要额外映射；此时离线名单退化为"仅服务端放行"） |
 
@@ -607,6 +608,23 @@ URLClassLoader** 加载真正的服务端。Agent 的辅助类必须用反射 `C
 * 管理员命令有权限门槛，且拒绝把命令根设成原版命令名（那会把原版命令整条遮蔽）；
 * 挖掘命令默认更高权限门槛 + 体积/边长上限 + 预演确认，属"防手滑"设计。
 
+### 10.5 26.x 的真实 API（换大版本时最容易踩的坑）
+
+钩子是按名字 + 参数个数 + **返回类型**匹配的，而这些在 26.x 里变过。已经踩过并修好的三处：
+
+| 位置 | 老版本（≤1.21.x） | 26.3 实测 | 踩坑后果 |
+| --- | --- | --- | --- |
+| 命令入口 `Commands#performPrefixedCommand` / `performCommand` | 返回 `int` | 返回 **`void`** | 匹配器要求 int ⇒ 一个方法都没匹配上，**所有 `/hy` 命令落到原版报"未知命令"**。现在按 `void` / `int` / `boolean` 三种返回类型分别挂切面 |
+| 权限 `CommandSourceStack#hasPermission(int)` | 存在 | **已删除**，改为 `permissions()` → `PermissionSet#hasPermission(Permission)`，用 `Permissions.COMMANDS_MODERATOR/GAMEMASTER/ADMIN/OWNER` 对应等级 1~4 | 只走旧路径会把所有人判成 0 级 ⇒ 命令挂上了却"权限不足"。现在两条路径都试 |
+| 方块实体 tick | `LevelChunk#tickBlockEntities()` 按区块 | **已移除**，改为 `Level#tickBlockEntities()` **维度级**遍历 | 方块实体分项恒为 0。现在挂 `TickingBlockEntity#tick()`（每个方块实体一次），用 `getPos()` 反推区块，保住"按区块"粒度 |
+
+还有一处同样的"null 当失败"写法：内部派发命令（勘探的 tp、空置域挖掘的 `/fill`）原来用
+"反射返回值 != null"判断成功，而 `void` 方法成功也返回 `null` ⇒ 挖掘任务在真机上刚开就报"命令派发失败"。
+现在统一用"**方法找得到且调用没抛异常**"判断（`VanillaReflect.callMatchingQuietly`）。
+
+> 判断某个功能到底挂上没有：看 `verify/realjar.ps1` 的输出，或游戏里 `/hy status` 的逐条能力探测。
+> **不要**只看日志里的"命中…切面 / 已改写目标类字节码"—— 这两行在方法匹配为空时也会打印。
+
 ---
 
 ## 十一、许可证与致谢
@@ -633,7 +651,9 @@ URLClassLoader** 加载真正的服务端。Agent 的辅助类必须用反射 `C
 
 ## 十二、自检（可选，但建议跑）
 
-四套自检都是"**把真实切面内联进 26.x 形状的替身类**"的离线回归，不需要真服务端、不联网（除首次下依赖）：
+四套自检都是"**把真实切面内联进 26.x 形状的替身类**"的离线回归，不需要真服务端、不联网（除首次下依赖）。
+另外还有一个**真机核对**脚本：它直接反编译你的 `server.jar`，把每个切点的方法名/参数个数/返回类型核一遍 ——
+这是唯一能防住"日志说已改写、功能却整块失效"的检查（v1.0.6 就栽在这里，见 §10.5）。
 
 ```powershell
 # 需要 JDK 25（默认按本机路径找，找不到就用 PATH 上的 java/javac）
@@ -641,6 +661,9 @@ pwsh -File verify\loaderiso.ps1 -JavaHome "C:\path\to\jdk-25"
 pwsh -File verify\chat.ps1      -JavaHome "C:\path\to\jdk-25"
 pwsh -File verify\lag.ps1       -JavaHome "C:\path\to\jdk-25"
 pwsh -File verify\verify.ps1    -JavaHome "C:\path\to\jdk-25"
+
+# 真机核对：把你的 server.jar 指给它（Bundler 会自动拆内层 jar）
+pwsh -File verify\realjar.ps1 -ServerJar "C:\path\to\server.jar" -JavaHome "C:\path\to\jdk-25"
 ```
 
 | 脚本 | 验什么 | 断言 |
@@ -649,8 +672,10 @@ pwsh -File verify\verify.ps1    -JavaHome "C:\path\to\jdk-25"
 | `verify/chat.ps1` | 外置账号聊天逐接收者分流（发给别人→伪装聊天、发给自己→原版消息、正版不动、开关可关） | 11/11 |
 | `verify/lag.ps1` | 勘探采样/聚类/报告/传送、命令接管与权限、UUIDv7 与沿用逻辑、配置版本校对与自动补齐、空置域挖掘计划与节流 | 83 项 |
 | `verify/verify.ps1` | Authlib 3/6/10 三代真实字节码 + 新旧签名 + 握手改写 + 热重载 | 各 20/20 |
+| `verify/realjar.ps1` | **真 server.jar 上的切点签名**：命令入口、两代权限 API、勘探切点、鉴权/聊天切点 | 20 项 |
 
-CI（`.github/workflows/ci.yml`）在 Java 25 + Windows 上跑的就是这四套；改代码后本机先跑一遍能省一次推送。
+CI（`.github/workflows/ci.yml`）在 Java 25 + Windows 上跑的是前四套；`realjar.ps1` 需要你本地的 `server.jar`，
+所以放在本机跑（换服务端版本、或升级大版本后建议跑一次）。
 
 ---
 
@@ -730,7 +755,7 @@ src/main/java/com/hyauth/agent/
   config/ListManager       配置读取、版本校对、自动补齐、名单查询
   util/                    VanillaReflect / ChunkLagSampler / LagReport / AdminCommands /
                            ClearJob / ConfigWriter / ExistingUuidScan / UuidV7 / ChatOut
-verify/                    四套自检脚本与替身（loaderiso / chat / lag / verify）
+verify/                    四套离线自检 + 真机切点核对（verify/realjar.ps1）与替身
 .github/workflows/         ci.yml（构建 + 四套自检）、release.yml（自动版本号 + 发行）
 ```
 

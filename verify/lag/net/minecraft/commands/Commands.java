@@ -4,31 +4,33 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 替身：命令系统。
+ * 替身：命令系统（<b>与真实 26.3 形状一致</b>）。
  *
- * <p>复现原版形状：控制台 / 游戏内 / RCON 最终都走
- * {@code performPrefixedCommand(CommandSourceStack, String)}，它内部再调
- * {@code performCommand(CommandSourceStack, String)}（26.x 就是这么分层）。
+ * <p>26.3 实测（用真实 server.jar 反编译确认）：
+ * <pre>
+ *   public void performPrefixedCommand(net.minecraft.commands.CommandSourceStack, java.lang.String);
+ *   public void performCommand(com.mojang.brigadier.ParseResults&lt;CommandSourceStack&gt;, java.lang.String);
+ * </pre>
+ * 两个方法都返回 <b>void</b>（更早的版本返回 int）。所以这里也声明成 void ——
+ * v1.0.6 的替身写成了 int，而切面匹配条件是 {@code returns(int.class)}，
+ * 于是"离线自检全绿、真机命令全落到原版"。替身与真实形状必须一致，这类假绿才不会再出现。
  *
- * <p>两个方法都<b>返回 int</b>（执行了几条命令）——这正是 {@code CommandAdvice} 的匹配条件
- * （{@code takesArguments(2) && returns(int.class)}），因此替身能真实触发"拦截并跳过原方法"。
- * 被真正派发到原版的命令会记进 {@link #vanilla}，供断言"我们的命令没进原版"以及
- * "传送确实交给了原版 /tp"。
+ * <p>因为返回值不再承载信息，"有没有被我们接管"改看派发轨迹：被 Agent 处理掉的命令
+ * <b>不会</b>出现在 {@link #vanilla} 里（原方法被跳过）；交给原版的命令会出现在里面。
  */
 public class Commands {
 
     /** 真正落到"原版派发"的命令轨迹。 */
     public static final List<String> vanilla = new ArrayList<String>();
 
-    public int performPrefixedCommand(CommandSourceStack source, String command) {
+    public void performPrefixedCommand(CommandSourceStack source, String command) {
         String normalized = command.startsWith("/") ? command.substring(1) : command;
         vanilla.add("prefixed:" + normalized);
-        return performCommand(source, normalized);
+        performCommand(source, normalized);
     }
 
-    public int performCommand(CommandSourceStack source, String command) {
+    public void performCommand(CommandSourceStack source, String command) {
         vanilla.add("plain:" + command);
-        return 1;
     }
 
     public static void reset() {

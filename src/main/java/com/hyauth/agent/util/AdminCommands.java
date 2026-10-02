@@ -780,7 +780,18 @@ public final class AdminCommands {
     // 工具
     // ==================================================================
 
-    /** 读取命令来源的原版权限等级（0~4）。控制台/RCON 天然是 4。 */
+    /**
+     * 读取命令来源的原版权限等级（0~4）。控制台 / RCON 天然是 4。
+     *
+     * <p>两大代的 API 完全不同，这里两条都试：
+     * <ul>
+     *   <li>≤ 1.21.x：{@code CommandSourceStack#hasPermission(int)} → boolean；</li>
+     *   <li>26.x：{@code CommandSourceStack#permissions()} → {@code PermissionSet}，再用
+     *       {@code Permissions.COMMANDS_MODERATOR / GAMEMASTER / ADMIN / OWNER} 反推等级
+     *       —— 26.3 实测已经删掉了 {@code hasPermission(int)}，只走旧路径会把所有玩家都判成 0 级
+     *       （于是"命令挂上了，但谁都用不了"）。</li>
+     * </ul>
+     */
     private static int permissionLevel(Object source) {
         if (source == null) {
             return 0;
@@ -792,12 +803,45 @@ public final class AdminCommands {
                     return level;
                 }
             } else {
-                // 该版本没有 hasPermission(int)：退化为"控制台（没有实体）允许、玩家一律拒绝"
-                Object entity = VanillaReflect.call(source, "getEntity");
-                return entity == null ? 4 : 0;
+                break; // 该版本没有 hasPermission(int)，改走下面的 PermissionSet 路径
             }
         }
-        return 0;
+        Object permissionSet = VanillaReflect.callMatching(source, "permissions");
+        if (permissionSet != null) {
+            for (int level = 4; level >= 1; level--) {
+                Object permission = commandPermission(source, level);
+                if (permission != null && Boolean.TRUE.equals(
+                        VanillaReflect.callMatching(permissionSet, "hasPermission", permission))) {
+                    return level;
+                }
+            }
+            return 0;
+        }
+        // 两条路都不通（更远的未来又换 API）：保守处理，只放行控制台/RCON
+        Object entity = VanillaReflect.call(source, "getEntity");
+        return entity == null ? 4 : 0;
+    }
+
+    /** {@code Permissions.COMMANDS_*} → 原版等级（1 moderator / 2 gamemaster / 3 admin / 4 owner）。 */
+    private static Object commandPermission(Object source, int level) {
+        String field;
+        switch (level) {
+            case 4:
+                field = "COMMANDS_OWNER";
+                break;
+            case 3:
+                field = "COMMANDS_ADMIN";
+                break;
+            case 2:
+                field = "COMMANDS_GAMEMASTER";
+                break;
+            default:
+                field = "COMMANDS_MODERATOR";
+                break;
+        }
+        Class<?> permissions = VanillaReflect.findClass("net.minecraft.server.permissions.Permissions",
+                VanillaReflect.loaderFor(source));
+        return permissions == null ? null : VanillaReflect.staticField(permissions, field);
     }
 
     private static Integer parseInt(String raw) {

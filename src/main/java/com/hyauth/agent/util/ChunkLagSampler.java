@@ -162,6 +162,81 @@ public final class ChunkLagSampler {
         return level != null ? level : VanillaReflect.fieldValue(chunk, "level");
     }
 
+    /**
+     * 退出一个 <b>方块实体 ticker</b>（26.x 的真实形状）：
+     * 方块实体是逐个 {@code net.minecraft.world.level.block.entity.TickingBlockEntity#tick()} 跑的，
+     * 26.3 里 {@code LevelChunk#tickBlockEntities()} 已经不存在（改成 {@code Level#tickBlockEntities()} 维度级遍历），
+     * 所以这里改挂 ticker 本身的 {@code tick()}，再用 {@code getPos()} 反推区块 —— 这样归因粒度仍然是"按区块"。
+     */
+    public static void endBlockEntityTickerTick(long startNanos, Object ticker) {
+        if (startNanos == 0L || !sampling()) {
+            return;
+        }
+        int[] chunkXZ = chunkXZOfTicker(ticker);
+        if (chunkXZ == null) {
+            return;
+        }
+        long key = key(chunkXZ[0], chunkXZ[1]);
+        Object level = levelOfEntity(ticker);
+        String dimension = dimensionId(level);
+        double ms = elapsedMs(startNanos);
+        Window resident = RESIDENT;
+        if (residentEnabled) {
+            resident.recordBlockEntityTick(dimension, key, ms);
+        }
+        Window current = scan;
+        if (current != null) {
+            current.recordBlockEntityTick(dimension, key, ms);
+        }
+    }
+
+    /** 方块实体 ticker 的区块坐标：{@code getPos()} 拿 BlockPos，再读它的 x/z 字段/取值方法。 */
+    private static int[] chunkXZOfTicker(Object ticker) {
+        Object pos = VanillaReflect.call(ticker, "getPos");
+        if (pos == null) {
+            // 有些实现只暴露字段，退化处理
+            pos = VanillaReflect.fieldValue(ticker, "pos");
+        }
+        if (pos == null) {
+            return null;
+        }
+        Integer x = blockPosComponent(pos, "getX", "x");
+        Integer z = blockPosComponent(pos, "getZ", "z");
+        if (x == null || z == null) {
+            return null;
+        }
+        return new int[] { x.intValue() >> 4, z.intValue() >> 4 };
+    }
+
+    private static Integer blockPosComponent(Object pos, String getter, String field) {
+        Object value = VanillaReflect.call(pos, getter);
+        if (value == null) {
+            value = VanillaReflect.fieldValue(pos, field);
+        }
+        return value instanceof Number ? Integer.valueOf(((Number) value).intValue()) : null;
+    }
+
+    /**
+     * ticker 所属的 Level：{@code TickingBlockEntity} 本身没有 level 引用，
+     * 但它的实现（如 {@code LevelChunk$RebindableTickingBlockEntityWrapper}）持有内层 ticker，
+     * 内层 ticker 通常是 {@code LevelChunk$BoundTickingBlockEntity} 之类，也没 level。
+     * 拿不到就返回 null（维度会显示为 unknown，不影响区块归因）。
+     */
+    private static Object levelOfEntity(Object ticker) {
+        Object inner = VanillaReflect.fieldValue(ticker, "ticker");
+        Object level = VanillaReflect.call(ticker, "getLevel");
+        if (level != null) {
+            return level;
+        }
+        if (inner != null && inner != ticker) {
+            level = VanillaReflect.call(inner, "getLevel");
+            if (level != null) {
+                return level;
+            }
+        }
+        return null;
+    }
+
     /** 单个实体 tick 结束（{@code tickNonPassenger} / {@code tickPassenger}）。 */
     public static void entityTick(long startNanos, Object level, Object entity) {
         if (startNanos == 0L || !sampling()) {

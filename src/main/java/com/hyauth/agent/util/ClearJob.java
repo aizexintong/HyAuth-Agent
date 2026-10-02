@@ -491,11 +491,12 @@ public final class ClearJob {
             return false;
         }
         String full = dimension == null ? "/" + command : "/execute in " + dimension + " run " + command;
-        Object result = VanillaReflect.callMatching(commands, "performPrefixedCommand", consoleSource, full);
-        if (result == null) {
-            result = VanillaReflect.callMatching(commands, "performCommand", consoleSource, full);
+        // ★ 不能用"返回值 != null"判断成功：26.3 里 performPrefixedCommand 返回 void，
+        //   反射调用成功同样是 null（v1.0.6 因此在真机上刚开就报"命令派发失败"）。
+        if (VanillaReflect.callMatchingQuietly(commands, "performPrefixedCommand", consoleSource, full)) {
+            return true;
         }
-        return result != null;
+        return VanillaReflect.callMatchingQuietly(commands, "performCommand", consoleSource, full);
     }
 
     // ==================================================================

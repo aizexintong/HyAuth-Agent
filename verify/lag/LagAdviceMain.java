@@ -2,9 +2,11 @@ package lag;
 
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.asm.Advice;
+import net.bytebuddy.description.method.MethodDescription;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
+import net.bytebuddy.matcher.ElementMatcher;
 import net.bytebuddy.matcher.ElementMatchers;
 import net.bytebuddy.pool.TypePool;
 
@@ -91,15 +93,21 @@ public class LagAdviceMain {
                 "net.minecraft.server.MinecraftServer", "tickServer", 1);
 
         // Commands：两个方法一起挂（performPrefixedCommand + performCommand）
+        // ★ 26.3 实测这两个方法返回 void（老版本是 int）——替身必须与真实形状一致，
+        //   否则会出现"离线自检全过、真机一个方法都匹配不上"的假绿（v1.0.6 就是这么翻车的）。
+        Class<?> commandAdviceVoid = Class.forName("com.hyauth.agent.CommandAdviceVoid", false, app);
         Class<?> commandAdvice = Class.forName("com.hyauth.agent.CommandAdvice", false, app);
         TypeDescription commandsDesc = describe(locator, "net.minecraft.commands.Commands");
+        ElementMatcher.Junction<MethodDescription> commandEntry = ElementMatchers
+                .named("performPrefixedCommand")
+                .or(ElementMatchers.named("performCommand"))
+                .and(ElementMatchers.takesArguments(2));
         Class<?> commandsType = new ByteBuddy()
                 .redefine(commandsDesc, locator)
+                .visit(Advice.to(commandAdviceVoid)
+                        .on(commandEntry.and(ElementMatchers.returns(void.class))))
                 .visit(Advice.to(commandAdvice)
-                        .on(ElementMatchers.named("performPrefixedCommand")
-                                .or(ElementMatchers.named("performCommand"))
-                                .and(ElementMatchers.takesArguments(2))
-                                .and(ElementMatchers.returns(int.class))))
+                        .on(commandEntry.and(ElementMatchers.returns(int.class))))
                 .make()
                 .load(child, ClassLoadingStrategy.Default.INJECTION)
                 .getLoaded();
@@ -155,9 +163,11 @@ public class LagAdviceMain {
         // ---------- 1) /hy lag list ----------
         sourceType.getMethod("reset").invoke(null);
         commandsType.getMethod("reset").invoke(null);
-        int handled = (Integer) commandsType.getMethod("performPrefixedCommand", sourceType, String.class)
+        commandsType.getMethod("performPrefixedCommand", sourceType, String.class)
                 .invoke(commands, console, "/hy lag list");
-        check(handled == 1, "命令拦截生效：/hy lag list 由 Agent 接管（返回值 1）");
+        check(!(Boolean) commandsType.getMethod("dispatchedAny", String.class).invoke(null, "lag"),
+                "命令拦截生效：/hy lag list 由 Agent 接管（原版派发轨迹里没有它）"
+                        + " —— 派发轨迹: " + commandsType.getMethod("trace").invoke(null));
         check(sourceType.getMethod("said", String.class).invoke(null, "x[0..31]") == Boolean.TRUE
                         && sourceType.getMethod("said", String.class).invoke(null, "z[0..15]") == Boolean.TRUE,
                 "相邻的两个高耗时区块被合并成一组坐标范围 x[0..31] z[0..15]（8ms/区块）"

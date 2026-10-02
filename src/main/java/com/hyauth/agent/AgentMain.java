@@ -3,11 +3,13 @@ package com.hyauth.agent;
 import com.hyauth.agent.config.ListManager;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
+import net.bytebuddy.description.method.MethodDescription;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.DynamicType;
 import net.bytebuddy.implementation.bytecode.StackManipulation;
 import net.bytebuddy.implementation.bytecode.assign.Assigner;
 import net.bytebuddy.implementation.bytecode.assign.TypeCasting;
+import net.bytebuddy.matcher.ElementMatcher;
 import net.bytebuddy.matcher.ElementMatchers;
 import net.bytebuddy.utility.JavaModule;
 
@@ -347,11 +349,30 @@ public class AgentMain {
                                     .on(ElementMatchers.named("tick").and(ElementMatchers.takesArguments(1))));
                 })
                 // ② 方块实体 tick：熔炉、漏斗、刷怪笼…（按区块归因）
+                //
+                // 26.3 实测：LevelChunk#tickBlockEntities() 已不存在，方块实体改成
+                // Level#tickBlockEntities() 维度级遍历 TickingBlockEntity 实现。
+                // 所以这里挂"每个 ticker 的 tick()"，再用 getPos() 反推区块 —— 保住"按区块"的粒度。
+                // 老的 LevelChunk 切点保留给 1.18~1.21.x（那些版本的方块实体也走 ticker，
+                // 但为免同一份耗时记两次，只在老类存在且没有 ticker 切点时才有意义 —— 见 README 说明）。
+                .type(ElementMatchers.hasSuperType(
+                        ElementMatchers.named("net.minecraft.world.level.block.entity.TickingBlockEntity")))
+                .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
+                    LoaderBridge.ensureInjected(classLoader);
+                    return dynamicType.visit(Advice.to(BlockEntityTickerAdvice.class)
+                            .on(ElementMatchers.named("tick").and(ElementMatchers.takesArguments(0))));
+                })
+                // ②b 老版本（≤1.21.x）的按区块 tick 入口：类/方法不存在时匹配为空，无副作用
                 .type(ElementMatchers.named(LEVEL_CHUNK_CLASS))
                 .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
                     LoaderBridge.ensureInjected(classLoader);
+                    if (typeDescription.getDeclaredMethods().filter(
+                            ElementMatchers.named("tickBlockEntities").and(ElementMatchers.takesArguments(0)))
+                            .isEmpty()) {
+                        return dynamicType;   // 26.3 起没有这个方法，直接跳过（不再打印误导性的"已挂载"）
+                    }
                     System.out.println("[HyAuth] 命中区块类: " + typeDescription.getName()
-                            + "，挂载「方块实体计时」勘探切面。");
+                            + "，挂载「方块实体计时」勘探切面（旧版按区块入口）。");
                     return dynamicType.visit(Advice.to(BlockEntityTickAdvice.class)
                             .on(ElementMatchers.named("tickBlockEntities").and(ElementMatchers.takesArguments(0))));
                 })
@@ -365,16 +386,27 @@ public class AgentMain {
                             .on(ElementMatchers.named("tickServer").and(ElementMatchers.takesArguments(1))));
                 })
                 // ④ 管理员命令接管：控制台 / 游戏内 / RCON 的汇聚点
+                //
+                // ⚠️ 必须按返回类型分别挂：26.3 实测这两个方法都是 void（老版本是 int）。
+                //    v1.0.6 只挂了 int 版本 ⇒ 真机上一个方法都没匹配上，命令全落到原版。
+                //    注意"命中命令系统 / 已改写目标类字节码"在方法匹配为空时也会打印，
+                //    所以判断是否真的挂上要看 verify/realjar.ps1（拿真 server.jar 核对签名）。
                 .type(ElementMatchers.named(COMMANDS_CLASS))
                 .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
                     LoaderBridge.ensureInjected(classLoader);
                     System.out.println("[HyAuth] 命中命令系统: " + typeDescription.getName()
                             + "，挂载「管理员命令接管」切面（命令根见配置 commands.roots）。");
-                    return dynamicType.visit(Advice.to(CommandAdvice.class)
-                            .on(ElementMatchers.named("performPrefixedCommand")
-                                    .or(ElementMatchers.named("performCommand"))
-                                    .and(ElementMatchers.takesArguments(2))
-                                    .and(ElementMatchers.returns(int.class))));
+                    ElementMatcher.Junction<MethodDescription> entry = ElementMatchers
+                            .named("performPrefixedCommand")
+                            .or(ElementMatchers.named("performCommand"))
+                            .and(ElementMatchers.takesArguments(2));
+                    return dynamicType
+                            .visit(Advice.to(CommandAdviceVoid.class)
+                                    .on(entry.and(ElementMatchers.returns(void.class))))
+                            .visit(Advice.to(CommandAdvice.class)
+                                    .on(entry.and(ElementMatchers.returns(int.class))))
+                            .visit(Advice.to(CommandAdviceBoolean.class)
+                                    .on(entry.and(ElementMatchers.returns(boolean.class))));
                 });
 
         try {

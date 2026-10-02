@@ -214,11 +214,11 @@ public final class LagReport {
             command = prefix + "spreadplayers " + blockX + " " + blockZ + " 0 1 false " + selector;
             ChatOut.warn(source, "未能解析该坐标的地表高度，改用原版 /spreadplayers 落地到地表（落点会在 ±1 方块内随机）。");
         }
-        Object result = VanillaReflect.callMatching(commands, "performPrefixedCommand", source, "/" + command);
-        if (result == null) {
-            result = VanillaReflect.callMatching(commands, "performCommand", source, command);
-        }
-        if (result == null) {
+        // ★ 26.3 的这两个方法返回 void：反射调用成功也拿到 null，所以用 callMatchingQuietly 判断
+        //   "到底调成了没有"，而不是拿返回值是否为空当成功标志（否则会误报派发失败，甚至重复执行一次）。
+        boolean ok = VanillaReflect.callMatchingQuietly(commands, "performPrefixedCommand", source, "/" + command)
+                || VanillaReflect.callMatchingQuietly(commands, "performCommand", source, command);
+        if (!ok) {
             ChatOut.error(source, "传送命令派发失败（版本差异），请手工执行: " + command);
             return false;
         }
