@@ -100,7 +100,7 @@ jobs:
           cache: maven
 
       - name: 构建 Agent jar
-        run: mvn -B -ntp clean package
+        run: mvn -B -ntp clean package "-Dbuild.version=${{ needs.version.outputs.version }}"
 
       - name: 自检 1/4 · 类加载器隔离（切面真的挂上了）
         shell: pwsh

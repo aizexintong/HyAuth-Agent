@@ -35,6 +35,12 @@
         <byte-buddy.version>1.17.5</byte-buddy.version>
         <authlib.version>3.11.49</authlib.version>
         <gson.version>2.10.1</gson.version>
+        <!-- 打进清单的版本号：默认是 Maven 版本（1.0.0），
+             发行工作流会用 -Dbuild.version=v1.0.x 覆盖成真实发行版本，
+             这样游戏里 /hy status 能直接显示"我这台跑的是哪个版本"。
+             ★ 注意：辅助类被注入到服务端类加载器后读不到 jar 清单，
+               所以 AgentMain 会在 premain 阶段把它写进系统属性 hyauth.version。 -->
+        <build.version>${project.version}</build.version>
     </properties>
 
     <repositories>
@@ -123,7 +129,7 @@
                                         <Can-Redefine-Classes>true</Can-Redefine-Classes>
                                         <Can-Retransform-Classes>true</Can-Retransform-Classes>
                                         <Implementation-Title>HyAuth-Agent</Implementation-Title>
-                                        <Implementation-Version>${project.version}</Implementation-Version>
+                                        <Implementation-Version>${build.version}</Implementation-Version>
                                     </manifestEntries>
                                 </transformer>
                             </transformers>

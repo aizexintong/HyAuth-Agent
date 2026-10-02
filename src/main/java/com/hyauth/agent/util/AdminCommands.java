@@ -112,8 +112,56 @@ public final class AdminCommands {
         } else if ("clear".equals(verb) || "dig".equals(verb)) {
             clear(tokens, 2, commands, source, root);
         } else {
-            ChatOut.warn(source, "未知子命令: " + verb + "（/" + root + " help 看用法）");
+            String guess = closestSubcommand(verb);
+            ChatOut.warn(source, "未知子命令: " + verb + "（/" + root + " help 看用法）"
+                    + (guess == null ? "" : " —— 你是不是想用 /" + root + " " + guess + "？"));
         }
+    }
+
+    /** 已实现的子命令名（用于"你是不是想用…"的拼写建议）。 */
+    private static final String[] KNOWN_SUBCOMMANDS = {
+        "help", "status", "reload", "list", "add", "off", "del", "whois", "clear", "lag"
+    };
+
+    /** 拼错时给一个最可能的建议：先看前缀/包含关系，再看编辑距离 ≤ 2。 */
+    private static String closestSubcommand(String verb) {
+        if (verb == null || verb.isEmpty()) {
+            return null;
+        }
+        for (String known : KNOWN_SUBCOMMANDS) {
+            if (known.startsWith(verb) || verb.startsWith(known)) {
+                return known;
+            }
+        }
+        String best = null;
+        int bestDistance = 3;
+        for (String known : KNOWN_SUBCOMMANDS) {
+            int distance = editDistance(verb, known);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = known;
+            }
+        }
+        return best;
+    }
+
+    private static int editDistance(String a, String b) {
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[b.length()];
     }
 
     // ==================================================================
@@ -396,21 +444,43 @@ public final class AdminCommands {
         capability(source, "区块 tick", "net.minecraft.server.level.ServerLevel", "tickChunk", 2);
         capability(source, "实体（非乘客）", "net.minecraft.server.level.ServerLevel", "tickNonPassenger", 1);
         capability(source, "实体（乘客）", "net.minecraft.server.level.ServerLevel", "tickPassenger", 2);
-        capability(source, "方块实体", "net.minecraft.world.level.chunk.LevelChunk", "tickBlockEntities", 0);
+        // 方块实体有两个时代的入口：26.x 起改成 TickingBlockEntity#tick（逐个方块实体），
+        // 老版本是 LevelChunk#tickBlockEntities（按区块）。两个都报，避免"实际挂上了却显示未找到"。
+        boolean tickerHook = capability(source, "方块实体（26.x：TickingBlockEntity#tick）",
+                "net.minecraft.world.level.block.entity.TickingBlockEntity", "tick", 0);
+        boolean legacyHook = capability(source, "方块实体（旧版：LevelChunk#tickBlockEntities）",
+                "net.minecraft.world.level.chunk.LevelChunk", "tickBlockEntities", 0);
+        if (!tickerHook && !legacyHook) {
+            ChatOut.note(source, "      ↑ 两条都没有 ⇒ 方块实体分项会一直是 0（其它分项照常）");
+        }
         capability(source, "整服 MSPT", "net.minecraft.server.MinecraftServer", "tickServer", 1);
         capability(source, "命令接管", "net.minecraft.commands.Commands", "performPrefixedCommand", 2);
         capability(source, "命令接管（旧名）", "net.minecraft.commands.Commands", "performCommand", 2);
+        // 权限：两代 API 都探，报告哪一种可用（26.3 删掉了 hasPermission(int)）
+        boolean oldPerm = VanillaReflect.method(VanillaReflect.findClass(
+                "net.minecraft.commands.CommandSourceStack", VanillaReflect.loaderFor(source)),
+                "hasPermission", 1) != null;
+        boolean newPerm = VanillaReflect.findClass("net.minecraft.server.permissions.PermissionSet",
+                VanillaReflect.loaderFor(source)) != null
+                && VanillaReflect.method(VanillaReflect.findClass(
+                        "net.minecraft.commands.CommandSourceStack", VanillaReflect.loaderFor(source)),
+                        "permissions", 0) != null;
+        ChatOut.note(source, "  · 权限判定: " + (oldPerm ? "旧 API hasPermission(int)" : "")
+                + (oldPerm && newPerm ? " + " : "")
+                + (newPerm ? "26.x 权限模型 permissions()/PermissionSet（COMMANDS_*）" : "")
+                + (!oldPerm && !newPerm ? "都没找到（只会放行控制台/RCON）" : ""));
     }
 
-    private static void capability(Object source, String label, String className, String method, int arity) {
+    private static boolean capability(Object source, String label, String className, String method, int arity) {
         Class<?> type = VanillaReflect.findClass(className, VanillaReflect.loaderFor(source));
         if (type == null) {
             ChatOut.note(source, "  · " + label + ": 未找到 " + className + "（该版本可能改名或混淆）");
-            return;
+            return false;
         }
         boolean ok = VanillaReflect.method(type, method, arity) != null;
         ChatOut.note(source, "  · " + label + ": " + (ok ? "可挂载（" + method + "）"
                 : "未找到 " + method + "/" + arity + "（该类别将为 0）"));
+        return ok;
     }
 
     // ==================================================================
@@ -853,8 +923,14 @@ public final class AdminCommands {
     }
 
     private static String version() {
+        // 优先用 AgentMain 在 premain 阶段写下的系统属性：辅助类被注入到服务端类加载器后，
+        // 通过 Package 读不到 agent jar 的清单（真机上就显示成了"开发版"）。
+        String fromProperty = System.getProperty("hyauth.version");
+        if (fromProperty != null && !fromProperty.isEmpty()) {
+            return fromProperty;
+        }
         Package owner = AdminCommands.class.getPackage();
         String version = owner == null ? null : owner.getImplementationVersion();
-        return version == null ? "开发版" : version;
+        return version == null || version.isEmpty() ? "开发版（未标注）" : version;
     }
 }

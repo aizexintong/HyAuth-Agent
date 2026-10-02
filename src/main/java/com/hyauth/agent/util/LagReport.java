@@ -70,9 +70,10 @@ public final class LagReport {
             }
         }
 
-        ChatOut.note(source, "可用: /" + root + " lag（直接出报告）· /" + root + " lag 30（采样 30 秒）· /"
-                + root + " lag top [N] 单区块榜 · /" + root + " lag tp <序号> 传送到某一组 · /" + root
-                + " lag here 看脚下这块 · /" + root + " lag clear 清空重来");
+        String p = lagPrefix(root);
+        ChatOut.note(source, "可用: " + p + "（直接出报告）· " + p + "30（采样 30 秒）· " + p
+                + "top [N] 单区块榜 · " + p + "tp <序号> 传送到某一组 · " + p + "here 看脚下这块 · "
+                + p + "clear 清空重来 · " + p + "on|off|stop 开关与中止");
     }
 
     private static void renderCluster(Object source, ChunkLagSampler.Analysis analysis,
@@ -85,16 +86,16 @@ public final class LagReport {
         double entityCount = cluster.chunks == 0 ? 0D : cluster.entityCount / cluster.chunks;
 
         String text = String.format(Locale.ROOT,
-                "  #%d %s x[%d..%d] z[%d..%d]  %d 区块  合计均值 %.2fms 峰值 %.2fms  [区块 %.2f | 实体 %.2f(≈%.0f只) | 方块实体 %.2f]  点击传送",
+                "  #%d %s x[%d..%d] z[%d..%d]  %d 区块  合计均值 %.2fms 峰值 %.2fms  [区块 %.2f | 实体 %.2f%s | 方块实体 %.2f]  点击传送",
                 index, dimension, cluster.minBlockX(), cluster.maxBlockX(), cluster.minBlockZ(), cluster.maxBlockZ(),
-                cluster.chunks, avg, cluster.peakMs, chunkAvg, entityAvg, entityCount, blockEntityAvg);
+                cluster.chunks, avg, cluster.peakMs, chunkAvg, entityAvg, entityNote(entityCount), blockEntityAvg);
         String hover = String.format(Locale.ROOT,
-                "点击传送到该范围中心\n维度: %s\n方块范围: x[%d..%d] z[%d..%d]\n中心: %d, %d\n合计均值: %.2fms / 峰值: %.2fms\n区块 tick: %.2fms\n实体: %.2fms（平均约 %.0f 只）\n方块实体: %.2fms\n覆盖区块: %d",
+                "点击传送到该范围中心\n维度: %s\n方块范围: x[%d..%d] z[%d..%d]\n中心: %d, %d\n合计均值: %.2fms / 峰值: %.2fms\n区块 tick: %.2fms\n实体: %.2fms%s\n方块实体: %.2fms\n覆盖区块: %d",
                 cluster.dimension, cluster.minBlockX(), cluster.maxBlockX(), cluster.minBlockZ(), cluster.maxBlockZ(),
                 cluster.centerBlockX(), cluster.centerBlockZ(), avg, cluster.peakMs,
-                chunkAvg, entityAvg, entityCount, blockEntityAvg, cluster.chunks);
+                chunkAvg, entityAvg, (entityCount >= 1D ? String.format(Locale.ROOT, "（平均约 %.0f 只）", entityCount) : ""), blockEntityAvg, cluster.chunks);
         String color = cluster.peakMs >= analysis.thresholdMs * 3D ? ChatOut.RED : ChatOut.GOLD;
-        ChatOut.clickable(source, text, color, "/" + root + " lag tp " + index, hover);
+        ChatOut.clickable(source, text, color, lagPrefix(root) + "tp " + index, hover);
     }
 
     /** 单区块榜（按单次峰值排序）。 */
@@ -115,17 +116,17 @@ public final class LagReport {
                 ChatOut.line(source, "· " + ChunkLagSampler.dimensionLabel(currentDimension) + "（" + currentDimension + "）");
             }
             String text = String.format(Locale.ROOT,
-                    "  #%-2d 区块(%d,%d) 方块(%d,%d)  峰值 %.2fms 均值 %.2fms  [区块 %.2f | 实体 %.2f(≈%.0f只) | 方块实体 %.2f]  点击传送",
+                    "  #%-2d 区块(%d,%d) 方块(%d,%d)  峰值 %.2fms 均值 %.2fms  [区块 %.2f | 实体 %.2f%s | 方块实体 %.2f]  点击传送",
                     index, row.chunkX, row.chunkZ, row.centerBlockX(), row.centerBlockZ(),
-                    row.totalPeakMs, row.totalAvgMs, row.chunkAvgMs, row.entityAvgMs, row.entityCount,
+                    row.totalPeakMs, row.totalAvgMs, row.chunkAvgMs, row.entityAvgMs, entityNote(row.entityCount),
                     row.blockEntityAvgMs);
             String hover = String.format(Locale.ROOT,
-                    "点击传送到该区块中心\n维度: %s\n区块: (%d, %d)\n方块范围: x[%d..%d] z[%d..%d]\n峰值: %.2fms / 均值: %.2fms\n实体: %.2fms（平均约 %.0f 只）\n方块实体: %.2fms\n采样 tick 数: %d",
+                    "点击传送到该区块中心\n维度: %s\n区块: (%d, %d)\n方块范围: x[%d..%d] z[%d..%d]\n峰值: %.2fms / 均值: %.2fms\n实体: %.2fms%s\n方块实体: %.2fms\n采样 tick 数: %d",
                     row.dimension, row.chunkX, row.chunkZ, row.chunkX * 16, row.chunkX * 16 + 15,
                     row.chunkZ * 16, row.chunkZ * 16 + 15, row.totalPeakMs, row.totalAvgMs,
-                    row.entityAvgMs, row.entityCount, row.blockEntityAvgMs, row.ticks);
+                    row.entityAvgMs, (row.entityCount >= 1D ? String.format(Locale.ROOT, "（平均约 %.0f 只）", row.entityCount) : ""), row.blockEntityAvgMs, row.ticks);
             String color = row.totalPeakMs >= analysis.thresholdMs * 3D ? ChatOut.RED : ChatOut.GOLD;
-            ChatOut.clickable(source, text, color, "/" + root + " lag tp " + row.centerBlockX() + " " + row.centerBlockZ(),
+            ChatOut.clickable(source, text, color, lagPrefix(root) + "tp " + row.centerBlockX() + " " + row.centerBlockZ(),
                     hover);
             index++;
         }
@@ -159,7 +160,7 @@ public final class LagReport {
             return;
         }
         ChatOut.line(source, String.format(Locale.ROOT,
-                "均值合计 %.2fms / 峰值 %.2fms  [区块 tick %.2f | 实体 %.2f(≈%.0f只) | 方块实体 %.2f]  采样 %d tick",
+                "均值合计 %.2fms / 峰值 %.2fms  [区块 tick %.2f | 实体 %.2f%s | 方块实体 %.2f]  采样 %d tick",
                 row.totalAvgMs, row.totalPeakMs, row.chunkAvgMs, row.entityAvgMs, row.entityCount,
                 row.blockEntityAvgMs, row.ticks));
         double threshold = ListManager.getLagFlagThresholdMs();
@@ -247,5 +248,14 @@ public final class LagReport {
     /** 小工具：保留两位小数，避免 report 里出现 0.30000000000000004。 */
     public static String format(double value) {
         return String.format(Locale.ROOT, "%.2f", value);
+    }
+    /** 报表里的子命令前缀：命令根本身就是 lag 时不能再拼一次 lag（否则会出现 /lag lag tp 1）。 */
+    private static String lagPrefix(String root) {
+        return "lag".equals(root) ? "/lag " : "/" + root + " lag ";
+    }
+
+    /** 实体只数：估算不出（0）时返回空串，不要在报告里显示「≈0 只」。 */
+    private static String entityNote(double count) {
+        return count >= 1D ? String.format(Locale.ROOT, "(≈%.0f只)", count) : "";
     }
 }

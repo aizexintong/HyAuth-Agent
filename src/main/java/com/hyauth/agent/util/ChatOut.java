@@ -231,21 +231,45 @@ public final class ChatOut {
         return VanillaReflect.enumConstant(type, name);
     }
 
-    /** 把一条组件发给命令来源；发送路径在首次调用时探测并缓存。 */
+    /**
+     * 把一条组件发给命令来源。
+     *
+     * <p>探测失败时不再"只打控制台"：直接按优先级**逐个真试**（sendSuccess → sendSystemMessage →
+     * sendMessage），哪一个调成了就记住它。真机上出现过"探测说不可用、其实 sendSuccess 完全能用"
+     * 的情况（探测依赖 {@code Component.literal} 与加载器解析，早期调用可能解析不到），
+     * 所以这里以"实际调通"为准，而不是以探测结论为准。
+     */
     private static void send(Object source, Object component) {
-        switch (resolveSendMode(source)) {
-            case 1:
-                VanillaReflect.callMatching(source, "sendSuccess", new ComponentSupplier(component), Boolean.FALSE);
-                break;
-            case 2:
-                VanillaReflect.callMatching(source, "sendSystemMessage", component);
-                break;
-            case 3:
-                VanillaReflect.callMatching(source, "sendMessage", component);
-                break;
-            default:
-                // 没有任何可用通道：控制台那一份已经在 emit() 里打过了
-                break;
+        int mode = resolveSendMode(source);
+        if (mode <= 0 || mode == 1) {
+            if (VanillaReflect.callMatchingQuietly(source, "sendSuccess", new ComponentSupplier(component),
+                    Boolean.FALSE)) {
+                remember(1, "CommandSourceStack#sendSuccess(Supplier,boolean)");
+                return;
+            }
+            if (mode == 1) {
+                sendMode = 0;   // 之前探测到的通道失效了（换加载器/换版本），下次重新探测
+            }
+        }
+        if (mode <= 0 || mode == 2) {
+            if (VanillaReflect.callMatchingQuietly(source, "sendSystemMessage", component)) {
+                remember(2, "CommandSourceStack#sendSystemMessage(Component)");
+                return;
+            }
+        }
+        if (mode <= 0 || mode == 3) {
+            if (VanillaReflect.callMatchingQuietly(source, "sendMessage", component)) {
+                remember(3, "CommandSourceStack#sendMessage(Component)（旧版）");
+                return;
+            }
+        }
+        // 三个通道都调不通：控制台那一份已经在 emit() 里打过了，这里不再重复
+    }
+
+    private static void remember(int mode, String path) {
+        if (sendMode != mode) {
+            sendMode = mode;
+            sendPath = path;
         }
     }
 

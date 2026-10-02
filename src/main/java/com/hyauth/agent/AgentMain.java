@@ -14,6 +14,7 @@ import net.bytebuddy.matcher.ElementMatchers;
 import net.bytebuddy.utility.JavaModule;
 
 import java.lang.instrument.Instrumentation;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * HyAuth-Agent 启动入口。
@@ -359,6 +360,11 @@ public class AgentMain {
                         ElementMatchers.named("net.minecraft.world.level.block.entity.TickingBlockEntity")))
                 .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
                     LoaderBridge.ensureInjected(classLoader);
+                    // 打一行日志证明"真的匹配到 ticker 实现类了"（前 5 个就够，避免刷屏）
+                    if (TICKER_HOOK_LOGGED.incrementAndGet() <= 5) {
+                        System.out.println("[HyAuth] 命中方块实体 ticker: " + typeDescription.getName()
+                                + "，挂载「方块实体计时」勘探切面（26.x 路径）。");
+                    }
                     return dynamicType.visit(Advice.to(BlockEntityTickerAdvice.class)
                             .on(ElementMatchers.named("tick").and(ElementMatchers.takesArguments(0))));
                 })
@@ -418,10 +424,21 @@ public class AgentMain {
         }
     }
 
+    private static final AtomicInteger TICKER_HOOK_LOGGED = new AtomicInteger();
+
     private static void banner() {
+        // ★ 版本号：辅助类会被注入到服务端类加载器，那边读不到本 jar 的清单，
+        //   所以在 premain 阶段（此刻 AgentMain 由 system 加载器从 agent jar 加载，清单可见）
+        //   把版本写进系统属性，供注入后的 AdminCommands 读取（/hy status 显示的就是它）。
+        String version = AgentMain.class.getPackage() == null ? null
+                : AgentMain.class.getPackage().getImplementationVersion();
+        if (version == null || version.isEmpty()) {
+            version = "1.0.0";
+        }
+        System.setProperty("hyauth.version", version);
         System.out.println("==================================================");
         System.out.println("  HyAuth-Agent 内存鉴权分流代理已启动");
-        System.out.println("  版本: " + AgentMain.class.getPackage().getImplementationVersion());
+        System.out.println("  版本: " + version);
         System.out.println("  Java: " + System.getProperty("java.version")
                 + " (" + System.getProperty("java.vendor") + ")");
         System.out.println("==================================================");

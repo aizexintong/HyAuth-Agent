@@ -646,17 +646,25 @@ public final class ChunkLagSampler {
         Object dimensionKey = VanillaReflect.call(level, "dimension");
         if (dimensionKey != null) {
             Object location = VanillaReflect.call(dimensionKey, "location");
+            if (location == null) {
+                location = VanillaReflect.call(dimensionKey, "registry");
+            }
+            if (location == null) {
+                location = VanillaReflect.call(dimensionKey, "identifier");
+            }
             if (location != null) {
                 id = String.valueOf(location);
             }
             if (isBlank(id)) {
-                id = String.valueOf(dimensionKey);
+                // ResourceKey 的 toString 形如 "ResourceKey[minecraft:dimension / minecraft:the_nether]"，
+                // 直接拿来当维度名会很难看（真机上就这么显示的），这里统一抽成 "minecraft:the_nether"
+                id = normalizeDimensionId(String.valueOf(dimensionKey));
             }
         }
         if (isBlank(id)) {
             Object description = VanillaReflect.call(level, "getDescription");
             if (description != null) {
-                id = String.valueOf(description);
+                id = normalizeDimensionId(String.valueOf(description));
             }
         }
         if (isBlank(id)) {
@@ -665,6 +673,32 @@ public final class ChunkLagSampler {
         DIMENSION_NAMES.put(level, id);
         DIMENSION_LEVELS.put(id, level);
         return id;
+    }
+
+    /**
+     * 把各种写法统一成 {@code minecraft:the_nether} 这种维度 id。
+     *
+     * <p>见过三种：{@code ResourceLocation.toString()} 的正常写法、{@code ResourceKey[...] } 的 toString、
+     * 以及 {@code getDescription()} 给出的翻译键/中文名。这里只做"能抽出 id 就抽"的保守处理。
+     */
+    private static String normalizeDimensionId(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim();
+        int slash = value.lastIndexOf(" / ");
+        if (slash >= 0) {
+            value = value.substring(slash + 3);
+        }
+        int open = value.indexOf('[');
+        if (open >= 0) {
+            value = value.substring(open + 1);
+        }
+        while (value.endsWith("]") || value.endsWith("'") || value.endsWith("\"")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        value = value.trim();
+        return value.isEmpty() ? null : value;
     }
 
     /** 维度中文标签（报告里更好读）。 */
