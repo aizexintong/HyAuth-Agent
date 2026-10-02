@@ -48,6 +48,7 @@ public final class AdminCommands {
         if (rawCommand == null) {
             return false;
         }
+        source = unwrapSource(source);
         String line = rawCommand.trim();
         if (line.isEmpty()) {
             return false;
@@ -80,6 +81,189 @@ public final class AdminCommands {
             t.printStackTrace();
         }
         return true;
+    }
+
+    /**
+     * 把我们的命令节点注册进<b>真实的 Brigadier 命令树</b>。
+     *
+     * <p>为什么必须注册：只做"分发入口拦截"时，客户端的命令树里没有 {@code hy}/{@code lag}，
+     * 于是 ① Tab 补全没有我们的命令；② 聊天里 {@code ClickEvent.RunCommand} 会被<b>客户端</b>
+     * 本地拒绝（玩家看到红字"未知或不完整的命令"，服务端根本没收到）；③ 插件命令看起来像不存在。
+     * 注册之后这三件事一起解决，而执行仍然由分发入口的切面负责（注册的节点只是"占位 + 可执行兜底"）。
+     *
+     * <p>实现上全部走反射：切面类字节码里不能出现服务端/Brigadier 类型引用（README §10.3），
+     * 而 {@code com.mojang.brigadier} 只在服务端子加载器里可见。
+     *
+     * <p>注册时机：{@code Commands} 构造完成时（见 {@code CommandTreeAdvice}）——
+     * 那时玩家还没登录，登录时下发的命令树就已经包含我们；{@code /hy reload} 也会再注册一次。
+     *
+     * @return 成功注册的根命令个数（0 表示失败，原因在 {@link #lastTreeError()}）
+     */
+    public static int registerCommandTree(Object commands, java.util.Collection<String> roots) {
+        try {
+            ClassLoader loader = VanillaReflect.loaderFor(commands);
+            Object dispatcher = VanillaReflect.call(commands, "getDispatcher");
+            Object root = dispatcher == null ? null : VanillaReflect.call(dispatcher, "getRoot");
+            if (root == null) {
+                lastTreeError = "拿不到 CommandDispatcher#getRoot（版本差异？）";
+                return 0;
+            }
+            Class<?> literal = VanillaReflect.findClass("com.mojang.brigadier.builder.LiteralArgumentBuilder", loader);
+            Class<?> required = VanillaReflect.findClass("com.mojang.brigadier.builder.RequiredArgumentBuilder", loader);
+            Class<?> stringType = VanillaReflect.findClass("com.mojang.brigadier.arguments.StringArgumentType", loader);
+            Class<?> commandIface = VanillaReflect.findClass("com.mojang.brigadier.Command", loader);
+            if (literal == null || required == null || stringType == null || commandIface == null) {
+                lastTreeError = "找不到 Brigadier 类（loader=" + loader + "）";
+                return 0;
+            }
+            Object executor = java.lang.reflect.Proxy.newProxyInstance(loader, new Class<?>[] { commandIface },
+                    new CommandInvoker(commands));
+            Object greedy = VanillaReflect.callStaticExact(stringType, "greedyString", new Class<?>[0]);
+            // ★ 权限门槛：只让"权限等级 ≥ commands.op_level"的来源（OP / 控制台 / RCON）看到这些命令。
+            //   原版给每个玩家下发命令树时会按 requires 过滤，所以非 OP 既没有 Tab 补全，
+            //   客户端也不会把这些命令发出去；服务端侧 tryHandle 里还有第二道检查。
+            java.util.function.Predicate<Object> requirement = new java.util.function.Predicate<Object>() {
+                @Override
+                public boolean test(Object commandSource) {
+                    try {
+                        return permissionLevel(commandSource) >= ListManager.getCommandOpLevel();
+                    } catch (Throwable t) {
+                        return false;
+                    }
+                }
+            };
+            int registered = 0;
+            for (String name : roots) {
+                Object builder = VanillaReflect.callStaticExact(literal, "literal", new Class<?>[] { String.class }, name);
+                if (builder == null) {
+                    continue;
+                }
+                builder = VanillaReflect.callMatching(builder, "requires", requirement);
+                builder = VanillaReflect.callMatching(builder, "executes", executor);
+                for (String verb : subcommandsOf(name)) {
+                    Object verbBuilder = VanillaReflect.callStaticExact(literal, "literal",
+                            new Class<?>[] { String.class }, verb);
+                    if (verbBuilder == null) {
+                        continue;
+                    }
+                    verbBuilder = VanillaReflect.callMatching(verbBuilder, "requires", requirement);
+                    verbBuilder = VanillaReflect.callMatching(verbBuilder, "executes", executor);
+                    if (greedy != null) {
+                        Object argument = VanillaReflect.callStaticExact(required, "argument",
+                                new Class<?>[] { String.class,
+                                        VanillaReflect.findClass("com.mojang.brigadier.arguments.ArgumentType", loader) },
+                                "args", greedy);
+                        if (argument != null) {
+                            argument = VanillaReflect.callMatching(argument, "requires", requirement);
+                            argument = VanillaReflect.callMatching(argument, "executes", executor);
+                            verbBuilder = VanillaReflect.callMatching(verbBuilder, "then", argument);
+                        }
+                    }
+                    builder = VanillaReflect.callMatching(builder, "then", verbBuilder);
+                }
+                Object node = VanillaReflect.callMatching(builder, "build");
+                if (node != null) {
+                    VanillaReflect.callMatching(root, "addChild", node);
+                    registered++;
+                }
+            }
+            commandTreeRegistered = registered > 0;
+            lastTreeError = registered > 0 ? null : "没有任何根命令注册成功";
+            if (registered > 0) {
+                System.out.println("[HyAuth] 已把命令注册进服务端命令树: " + roots
+                        + "（仅权限等级 ≥ " + ListManager.getCommandOpLevel()
+                        + " 可见可用：OP 与控制台/RCON；子命令带 Tab 补全；执行仍由分发入口切面接管）");
+            }
+            return registered;
+        } catch (Throwable t) {
+            lastTreeError = String.valueOf(t);
+            commandTreeRegistered = false;
+            System.err.println("[HyAuth] 注册命令树失败（只影响 Tab 补全与点击执行，命令本身仍可用）: " + t);
+            return 0;
+        }
+    }
+
+    /** 命令树是否注册成功（决定聊天里的点击用 RunCommand 还是 SuggestCommand）。 */
+    public static boolean isCommandTreeRegistered() {
+        return commandTreeRegistered;
+    }
+
+    /** 上一次注册失败的原因（/hy status 显示）。 */
+    public static String lastTreeError() {
+        return lastTreeError;
+    }
+
+    private static volatile boolean commandTreeRegistered;
+
+    private static volatile String lastTreeError;
+
+    /** 某个根命令下要注册的子命令（只为 Tab 补全与合法性，执行仍走入口切面）。 */
+    private static String[] subcommandsOf(String root) {
+        if ("lag".equals(root)) {
+            return new String[] { "scan", "top", "tp", "here", "on", "off", "stop", "clear", "status", "help" };
+        }
+        return new String[] { "help", "status", "reload", "list", "ls", "add", "off", "offline",
+            "del", "remove", "whois", "id", "clear", "lag" };
+    }
+
+    /**
+     * 注册进命令树的"执行器"：正常情况下根本不会走到这里（入口切面已经把命令接管了），
+     * 万一走到了（例如某个版本入口方法变了），至少给出明确回复而不是报错。
+     */
+    private static final class CommandInvoker implements java.lang.reflect.InvocationHandler {
+        private final Object commands;
+
+        CommandInvoker(Object commands) {
+            this.commands = commands;
+        }
+
+        @Override
+        public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] args) {
+            String name = method.getName();
+            if ("run".equals(name) && args != null && args.length == 1) {
+                Object context = args[0];
+                Object source = VanillaReflect.call(context, "getSource");
+                Object input = VanillaReflect.call(context, "getInput");
+                String line = input instanceof String ? (String) input : null;
+                if (line == null || line.isEmpty()) {
+                    ChatOut.warn(source, "HyAuth 命令已被接管，但拿不到原始输入（版本差异）；请手工敲 /hy help。");
+                    return Integer.valueOf(0);
+                }
+                return Integer.valueOf(tryHandle(commands, source, line) ? 1 : 0);
+            }
+            if ("toString".equals(name)) {
+                return "HyAuthCommand";
+            }
+            if ("hashCode".equals(name)) {
+                return Integer.valueOf(System.identityHashCode(proxy));
+            }
+            if ("equals".equals(name)) {
+                return Boolean.valueOf(proxy == (args == null || args.length == 0 ? null : args[0]));
+            }
+            return null;
+        }
+    }
+
+    /**
+     * 把"命令来源"归一化成真正的 {@code CommandSourceStack}。
+     *
+     * <p>为什么要这一步：控制台/RCON 走 {@code Commands#performPrefixedCommand(CommandSourceStack,String)}，
+     * 参数 0 就是命令来源；而<b>游戏内命令</b>走 {@code Commands#performCommand(ParseResults,String)} ——
+     * 参数 0 是 ParseResults！真机上因此出现过：命令确实被我们接管了，但权限判定拿不到权限、
+     * 发消息也没有通道，结果"游戏里什么都看不见、只有控制台有输出"。
+     *
+     * <p>{@code ParseResults#getContext()#getSource()} 就是那个 CommandSourceStack（替身与真实版都有）。
+     */
+    private static Object unwrapSource(Object source) {
+        if (source == null || VanillaReflect.method(source.getClass(), "getContext", 0) == null) {
+            return source;
+        }
+        Object context = VanillaReflect.call(source, "getContext");
+        if (context == null) {
+            return source;
+        }
+        Object unwrapped = VanillaReflect.call(context, "getSource");
+        return unwrapped == null ? source : unwrapped;
     }
 
     // ==================================================================
@@ -788,8 +972,15 @@ public final class AdminCommands {
     private static void reload(Object source, String root) {
         ListManager.reload();
         ChunkLagSampler.setResidentEnabled(ListManager.isLagResident());
+        // 命令根可能被改了：重新注册一次命令树（addChild 对同名节点是合并，重复注册无害）
+        Object server = VanillaReflect.call(source, "getServer");
+        Object commands = server == null ? null : VanillaReflect.call(server, "getCommands");
+        int registered = commands == null ? 0 : registerCommandTree(commands, ListManager.getCommandRoots());
         ChatOut.ok(source, "已重新读取 littleskin_config.json，并把 chunk_lag.resident = "
                 + ListManager.isLagResident() + " 同步到常驻采样开关。");
+        ChatOut.note(source, registered > 0
+                ? "命令树已按新的 roots 重新注册（" + ListManager.describeRoots() + "）。"
+                : "命令树本次未注册成功（只影响 Tab 补全与点击执行）：" + lastTreeError);
     }
 
     // ==================================================================
@@ -804,6 +995,10 @@ public final class AdminCommands {
                 + ListManager.offlinePlayerCount() + " 人 · API " + ListManager.getApiRoot());
         ChatOut.line(source, "配置文件: " + ListManager.FILE_NAME + " · 版本 v" + ListManager.getConfigVersion()
                 + "（本插件支持 v" + ListManager.CONFIG_VERSION + "）；低版本会在加载时自动补齐默认项，账号信息不动");
+        ChatOut.line(source, "命令树注册: " + (commandTreeRegistered
+                ? "已注册（Tab 补全能补出我们的命令，聊天里点一下可直接执行）"
+                : "未注册（" + (lastTreeError == null ? "尚未触发" : lastTreeError)
+                        + "）—— 只影响补全与点击，命令本身仍可用"));
         ChatOut.line(source, "聊天输出: " + ChatOut.describeSendPath() + " · 组件构造: " + ChatOut.componentAvailability());
         lagStatus(source, root);
     }

@@ -236,10 +236,12 @@ public final class VanillaReflect {
      */
     public static boolean callMatchingQuietly(Object target, String name, Object... args) {
         if (target == null) {
+            lastCallError = new IllegalStateException("target 为 null（" + name + "）");
             return false;
         }
         Method method = matchMethod(target.getClass(), name, args);
         if (method == null) {
+            lastCallError = new NoSuchMethodException(target.getClass().getName() + "#" + name);
             return false;
         }
         try {
@@ -249,9 +251,18 @@ public final class VanillaReflect {
             method.invoke(target, args);
             return true;
         } catch (Throwable t) {
+            lastCallError = t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null
+                    ? t.getCause() : t;
             return false;
         }
     }
+
+    /** 上一次 {@link #callMatchingQuietly} 失败的原因（诊断用，成功时为 null）。 */
+    public static Throwable lastCallError() {
+        return lastCallError;
+    }
+
+    private static volatile Throwable lastCallError;
 
     private static Method matchMethod(Class<?> owner, String name, Object[] args) {
         Class<?>[] argTypes = new Class<?>[args == null ? 0 : args.length];

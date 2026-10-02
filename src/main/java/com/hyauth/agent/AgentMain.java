@@ -412,7 +412,9 @@ public class AgentMain {
                             .visit(Advice.to(CommandAdvice.class)
                                     .on(entry.and(ElementMatchers.returns(int.class))))
                             .visit(Advice.to(CommandAdviceBoolean.class)
-                                    .on(entry.and(ElementMatchers.returns(boolean.class))));
+                                    .on(entry.and(ElementMatchers.returns(boolean.class))))
+                            // 构造结束时把命令注册进真实命令树（Tab 补全 + 客户端认可点击执行）
+                            .visit(Advice.to(CommandTreeAdvice.class).on(ElementMatchers.isConstructor()));
                 });
 
         try {

@@ -645,19 +645,16 @@ public final class ChunkLagSampler {
         String id = null;
         Object dimensionKey = VanillaReflect.call(level, "dimension");
         if (dimensionKey != null) {
+            // 旧版（≤1.21.x）：ResourceKey#location() 直接给出 minecraft:the_nether
             Object location = VanillaReflect.call(dimensionKey, "location");
-            if (location == null) {
-                location = VanillaReflect.call(dimensionKey, "registry");
-            }
-            if (location == null) {
-                location = VanillaReflect.call(dimensionKey, "identifier");
-            }
             if (location != null) {
                 id = String.valueOf(location);
             }
+            // 26.x：ResourceKey 没有 location()，只有 registryName（那是"注册表名" minecraft:dimension，
+            // 不是维度 id！）与 toString() = "ResourceKey[minecraft:dimension / minecraft:the_nether]"。
+            // 所以这里必须走 toString 解析，别再取 registry / identifier —— 真机上就是那里取错成
+            // minecraft:dimension，导致传送命令 /execute in minecraft:dimension run tp … 必然失败。
             if (isBlank(id)) {
-                // ResourceKey 的 toString 形如 "ResourceKey[minecraft:dimension / minecraft:the_nether]"，
-                // 直接拿来当维度名会很难看（真机上就这么显示的），这里统一抽成 "minecraft:the_nether"
                 id = normalizeDimensionId(String.valueOf(dimensionKey));
             }
         }
@@ -667,7 +664,7 @@ public final class ChunkLagSampler {
                 id = normalizeDimensionId(String.valueOf(description));
             }
         }
-        if (isBlank(id)) {
+        if (isBlank(id) || "minecraft:dimension".equals(id)) {
             id = "unknown";
         }
         DIMENSION_NAMES.put(level, id);

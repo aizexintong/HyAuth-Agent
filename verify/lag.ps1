@@ -64,7 +64,10 @@ New-Item -ItemType Directory -Force -Path $stubs, $app, $run | Out-Null
 Write-Host "[lag] 工作目录 = $out"
 
 Write-Host "[lag] 编译 26.x 形状的服务端替身 ..."
-$stubSources = Get-ChildItem -Recurse -File -Filter *.java (Join-Path $verify "lag\net") |
+# 替身 = verify\lag 下的全部 .java（net\** 是服务端类替身，com\mojang\brigadier\** 是 Brigadier 替身），
+# 排除测试主程序自己（它单独编译，需要 Agent 包在类路径上）
+$stubSources = Get-ChildItem -Recurse -File -Filter *.java (Join-Path $verify "lag") |
+    Where-Object { $_.Name -ne "LagAdviceMain.java" } |
     Select-Object -ExpandProperty FullName
 if (-not $stubSources -or $stubSources.Count -eq 0) {
     Write-Host "[lag] 没找到替身源码（verify\lag\net\**\*.java）—— checkout 是否完整？"

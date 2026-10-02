@@ -102,12 +102,15 @@ public class LagAdviceMain {
                 .named("performPrefixedCommand")
                 .or(ElementMatchers.named("performCommand"))
                 .and(ElementMatchers.takesArguments(2));
+        Class<?> commandTreeAdvice = Class.forName("com.hyauth.agent.CommandTreeAdvice", false, app);
         Class<?> commandsType = new ByteBuddy()
                 .redefine(commandsDesc, locator)
                 .visit(Advice.to(commandAdviceVoid)
                         .on(commandEntry.and(ElementMatchers.returns(void.class))))
                 .visit(Advice.to(commandAdvice)
                         .on(commandEntry.and(ElementMatchers.returns(int.class))))
+                // 构造结束时注册命令树（Tab 补全 + 客户端认可点击执行）
+                .visit(Advice.to(commandTreeAdvice).on(ElementMatchers.isConstructor()))
                 .make()
                 .load(child, ClassLoadingStrategy.Default.INJECTION)
                 .getLoaded();
@@ -168,6 +171,7 @@ public class LagAdviceMain {
         check(!(Boolean) commandsType.getMethod("dispatchedAny", String.class).invoke(null, "lag"),
                 "命令拦截生效：/hy lag list 由 Agent 接管（原版派发轨迹里没有它）"
                         + " —— 派发轨迹: " + commandsType.getMethod("trace").invoke(null));
+
         check(sourceType.getMethod("said", String.class).invoke(null, "x[0..31]") == Boolean.TRUE
                         && sourceType.getMethod("said", String.class).invoke(null, "z[0..15]") == Boolean.TRUE,
                 "相邻的两个高耗时区块被合并成一组坐标范围 x[0..31] z[0..15]（8ms/区块）"
@@ -565,6 +569,54 @@ public class LagAdviceMain {
         listManager.getMethod("reload").invoke(null);
 
         System.out.println();
+        // ---------- 1b) 命令树注册（Tab 补全 / 客户端认可点击执行） ----------
+        Object dispatcher = commandsType.getMethod("getDispatcher").invoke(commands);
+        Object treeRoot = dispatcher.getClass().getMethod("getRoot").invoke(dispatcher);
+        java.util.Map<?, ?> rootChildren = (java.util.Map<?, ?>) treeRoot.getClass().getMethod("getChildren").invoke(treeRoot);
+        check(rootChildren.containsKey("hy") && rootChildren.containsKey("lag"),
+                "命令已注册进真实命令树：根节点下出现 hy / lag（客户端因此有 Tab 补全、点击执行不会被本地拒绝）"
+                        + " —— 根节点: " + rootChildren.keySet());
+        check(rootChildren.containsKey("tp"),
+                "注册没有打扰原版：原版 /tp 仍在命令树里");
+        Object hyNode = rootChildren.get("hy");
+        java.util.Map<?, ?> hyChildren = (java.util.Map<?, ?>) hyNode.getClass().getMethod("getChildren").invoke(hyNode);
+        check(hyChildren.containsKey("add") && hyChildren.containsKey("off") && hyChildren.containsKey("clear"),
+                "一级子命令也注册了（/hy add、/hy off、/hy clear 都能补全） —— 子命令: " + hyChildren.keySet());
+        Object executor = hyNode.getClass().getMethod("getCommand").invoke(hyNode);
+        check(executor != null && java.lang.reflect.Proxy.isProxyClass(executor.getClass()),
+                "节点带了执行器（Proxy 实现 Brigadier Command），入口切面万一没接住也能给出回复");
+
+        // 权限门槛：非 OP 在命令树里看不到（原版按 requires 过滤下发给每个玩家）
+        Object requirement = hyNode.getClass().getMethod("getRequirement").invoke(hyNode);
+        check(requirement != null, "注册的节点带权限门槛 requires（非 OP 不会看到这些命令）");
+        java.util.function.Predicate<Object> predicate = (java.util.function.Predicate<Object>) requirement;
+        Object opSource = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(4, null, level);
+        Object plainSource = sourceType.getConstructor(int.class, Object.class, levelType).newInstance(0, null, level);
+        check(predicate.test(console) && predicate.test(opSource),
+                "控制台/RCON（权限 4）与 OP（权限 ≥ 2）通过门槛");
+        check(!predicate.test(plainSource),
+                "普通玩家（权限 0）被门槛挡住 —— 命令只允许 OP 与后台使用");
+
+        // 兜底执行器：拿原始输入回调我们的处理逻辑（这里模拟 Brigadier 调 run(context)）
+        Class<?> contextType = child.loadClass("com.mojang.brigadier.context.CommandContext");
+        Object context = contextType.getConstructor(Object.class, String.class).newInstance(console, "/hy lag here");
+        Object fallbackResult = executor.getClass().getMethod("run", contextType).invoke(executor, context);
+        check(Integer.valueOf(1).equals(fallbackResult) && said(sourceType, "脚下"),
+                "执行器兜底路径可用：直接调 run(context) 也能执行并回复（返回 " + fallbackResult + "）");
+
+        // ---------- 1c) 游戏内路径：performCommand(ParseResults, String) ----------
+        Class<?> parseResultsType = child.loadClass("com.mojang.brigadier.ParseResults");
+        Object parseResults = parseResultsType.getConstructor(contextType).newInstance(context);
+        commandsType.getMethod("reset").invoke(null);
+        sourceType.getMethod("reset").invoke(null);
+        commandsType.getMethod("performCommand", parseResultsType, String.class)
+                .invoke(commands, parseResults, "/hy status");
+        check(!(Boolean) commandsType.getMethod("dispatchedAny", String.class).invoke(null, "status"),
+                "游戏内路径（performCommand(ParseResults,String)）同样被接管：原版没拿到它"
+                        + " —— 派发轨迹: " + commandsType.getMethod("trace").invoke(null));
+        check(said(sourceType, "HyAuth 状态"),
+                "并且把 ParseResults 里的 CommandSourceStack 取了出来：回复发给了真正的命令来源"
+                        + "（真机上这里取不到就会「只有控制台有输出、聊天框空白」）");
         System.out.println(failures == 0 ? "[lag] 全部通过" : "[lag] 失败项: " + failures);
         System.exit(failures == 0 ? 0 : 1);
     }

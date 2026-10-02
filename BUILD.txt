@@ -16,11 +16,27 @@ HyAuth-Agent 构建与发行记录
 3. 升级只需替换 jar 并重启服务端；**配置文件不用动** ——
    新版本会自动补齐新增的配置项（只新增，账号信息与已有值原样保留，见 README 第五章）。
 
-最近一次发行：v1.0.8
+最近一次发行：v1.0.9
 ---------------------------------------------------------
 （push 到 main 即自动递增发行版号并发布，详情见 Release 页与 README）
 
 这一版新增 / 修复：
+  · 真机第二轮（v1.0.9）：命令注册进真实命令树 + 只允许 OP/后台
+      - ★ 把 /hy、/lag 与一级子命令**注册进真实的 Brigadier 命令树**（Commands 构造完成时，纯反射实现，
+        切面字节码仍不引用 Brigadier/服务端类型）：OP 有 **Tab 补全**；聊天里 /hy lag 报告的"点击传送"
+        改用 RunCommand（客户端认可，点一下直接执行）；普通玩家下发的命令树里没有这些命令
+      - ★ 注册的节点带 requires(权限等级 ≥ commands.op_level)：**只有 OP 与控制台/RCON 能用**，
+        普通玩家连补全都看不到、客户端也不会把命令发出去；服务端侧 tryHandle 仍有第二道权限检查
+      - ★ 修掉"游戏内命令只有控制台有输出、聊天框空白"：游戏内走 performCommand(ParseResults,String)，
+        第一个参数是 ParseResults 而不是命令来源；现在先 getContext().getSource() 取出真正的 CommandSourceStack
+      - ★ 修掉传送维度错误：26.x 的 ResourceKey 没有 location()，只有 registryName(minecraft:dimension)
+        与 toString()；原来取错成 minecraft:dimension，导致 /execute in minecraft:dimension run tp … 必然失败
+        （却报"已传送到"）。现在从 toString 解析出 minecraft:the_nether 这种真实维度 id
+      - 聊天发送兜底：探测失败时按 sendSuccess → sendSystemMessage → sendMessage 逐个真试并记住可用的那个
+      - 报告：维度显示"主世界/下界/末地"；实体只数估不出时不再显示"（≈0只）"
+      - /hy status 新增"命令树注册"一行；/hy reload 会按新的 roots 重新注册
+      - 自检新增 Brigadier 替身与 10 项断言（命令树注册、OP 门槛、ParseResults 运行期路径、兜底执行器），
+        现在共 93 项
   · 真机反馈的小修（v1.0.8）
       - /hy status 的切面能力探测补上 26.x 的方块实体路径（TickingBlockEntity#tick），
         并新增「权限判定」一行（旧 API / 26.x PermissionSet 各报告是否可用）；
@@ -80,6 +96,7 @@ HyAuth-Agent 构建与发行记录
 
 版本历史
 ---------------------------------------------------------
+  v1.0.9  命令注册进真实命令树 + 只允许 OP/后台；修游戏内聊天与传送维度
   v1.0.8  真机反馈小修：能力探测补 26.x 方块实体路径 + 权限行、报告维度名/只数/点击命令、聊天发送兜底、版本号
   v1.0.7  修掉三个真机静默失效（命令入口 void / 26.x 权限模型 / 方块实体切点）+ 真机核对脚本
   v1.0.6  BUILD.txt 精简并与发行版对齐；依赖下载重试与镜像兜底；CI 用 Java 25
@@ -92,8 +109,8 @@ HyAuth-Agent 构建与发行记录
 本机构建记录（仅供参考，官方哈希见发行页）
 ---------------------------------------------------------
   环境    : Microsoft OpenJDK 25.0.1 + Apache Maven 3.9.9，--release 8，shade 打包
-  大小    : 9,125,982 字节
-  SHA256  : e364b6bac75c55b67c08d3c98682fcd15969b1cfea2402ff6d13d3ddd8c234a3
+  大小    : 9,132,184 字节
+  SHA256  : 89b088e3c44a5e07da7c7661fd17096e492bf53dcb886492b9373ef6c7916e1c
 
 =========================================================
 （以下由 GitHub Actions 在发行时追加）

@@ -178,22 +178,43 @@ public final class ChatOut {
         return result != null ? result : component;
     }
 
-    /** {@code ClickEvent.RunCommand(String)}（新）或 {@code ClickEvent(Action.RUN_COMMAND, String)}（旧）。 */
+    /**
+     * 点击事件：优先 {@code ClickEvent.SuggestCommand(String)}，退而求其次 {@code RunCommand}（旧版）。
+     *
+     * <p><b>为什么用 SuggestCommand 而不是 RunCommand</b>：我们<b>没有</b>往 Brigadier 注册节点，
+     * 所以客户端的命令树里没有 {@code lag} 这个根命令。用 RunCommand 时客户端会**本地**拒绝执行
+     * （玩家看到红字"未知或不完整的命令"，服务端根本没收到），真机上点传送就是这么点不动的。
+     * SuggestCommand 只是把命令填进聊天输入框，玩家回车才发给服务端 —— 那时候就由我们的切面接住了。
+     */
     private static Object clickEvent(String command, ClassLoader loader) {
-        Class<?> modern = VanillaReflect.findClass(CLICK_EVENT + "$RunCommand", loader);
+        // 命令树注册成功时用 RunCommand（点一下直接执行）；没注册成功就退回 SuggestCommand
+        // （只把命令填进输入框，客户端不会本地拒绝）。
+        boolean canRun = AdminCommands.isCommandTreeRegistered();
+        Class<?> modern = VanillaReflect.findClass(CLICK_EVENT + (canRun ? "$RunCommand" : "$SuggestCommand"), loader);
         if (modern != null) {
             Object made = VanillaReflect.construct(modern, new Class<?>[]{String.class}, command);
             if (made != null) {
                 return made;
             }
         }
+        Class<?> fallback = VanillaReflect.findClass(
+                CLICK_EVENT + (canRun ? "$SuggestCommand" : "$RunCommand"), loader);
+        if (fallback != null) {
+            Object made = VanillaReflect.construct(fallback, new Class<?>[]{String.class}, command);
+            if (made != null) {
+                return made;
+            }
+        }
         Class<?> legacy = VanillaReflect.findClass(CLICK_EVENT, loader);
         Class<?> action = VanillaReflect.findClass(CLICK_EVENT + "$Action", loader);
-        Object runCommand = VanillaReflect.enumConstant(action, "RUN_COMMAND");
-        if (legacy == null || runCommand == null) {
+        Object kind = VanillaReflect.enumConstant(action, canRun ? "RUN_COMMAND" : "SUGGEST_COMMAND");
+        if (kind == null) {
+            kind = VanillaReflect.enumConstant(action, canRun ? "SUGGEST_COMMAND" : "RUN_COMMAND");
+        }
+        if (legacy == null || kind == null) {
             return null;
         }
-        return VanillaReflect.construct(legacy, new Class<?>[]{action, String.class}, runCommand, command);
+        return VanillaReflect.construct(legacy, new Class<?>[]{action, String.class}, kind, command);
     }
 
     /** {@code HoverEvent.ShowText(Component)}（新）或 {@code HoverEvent(Action.SHOW_TEXT, Component)}（旧）。 */
