@@ -168,6 +168,26 @@ public final class ChunkLagSampler {
      * 26.3 里 {@code LevelChunk#tickBlockEntities()} 已经不存在（改成 {@code Level#tickBlockEntities()} 维度级遍历），
      * 所以这里改挂 ticker 本身的 {@code tick()}，再用 {@code getPos()} 反推区块 —— 这样归因粒度仍然是"按区块"。
      */
+    /**
+     * 当前正在 tick 方块实体的维度（由 {@code Level#tickBlockEntities()} 的切面维护）。
+     *
+     * <p>为什么要它：26.x 的 ticker（{@code LevelChunk$RebindableTickingBlockEntityWrapper}）只持有内层 ticker，
+     * 没有任何 level 引用 —— 光靠 ticker 拿不到维度，报告里就会出现 "unknown"。
+     * 而 {@code Level#tickBlockEntities()} 是维度级地包着这些 ticker 调用的，在它入口/出口设一个上下文即可。
+     * 服务端 tick 是单线程的，用普通静态字段就够（不引入 ThreadLocal 的开销）。
+     */
+    private static volatile Object levelBlockEntityContext;
+
+    /** 进入 {@code Level#tickBlockEntities()}：记下当前维度。 */
+    public static void beginLevelBlockEntities(Object level) {
+        levelBlockEntityContext = level;
+    }
+
+    /** 退出 {@code Level#tickBlockEntities()}：清掉上下文。 */
+    public static void endLevelBlockEntities() {
+        levelBlockEntityContext = null;
+    }
+
     public static void endBlockEntityTickerTick(long startNanos, Object ticker) {
         if (startNanos == 0L || !sampling()) {
             return;
@@ -178,6 +198,10 @@ public final class ChunkLagSampler {
         }
         long key = key(chunkXZ[0], chunkXZ[1]);
         Object level = levelOfEntity(ticker);
+        if (level == null) {
+            // 26.x：ticker 本身没有 level 引用，用 Level#tickBlockEntities() 留下的维度上下文
+            level = levelBlockEntityContext;
+        }
         String dimension = dimensionId(level);
         double ms = elapsedMs(startNanos);
         Window resident = RESIDENT;

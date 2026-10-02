@@ -372,6 +372,15 @@ public class AgentMain {
                     return dynamicType.visit(Advice.to(BlockEntityTickerAdvice.class)
                             .on(ElementMatchers.named("tick").and(ElementMatchers.takesArguments(0))));
                 })
+                // ②a 维度上下文：Level#tickBlockEntities() 包着上面那些 ticker 调用，
+                //     在它入口记下"当前维度"，ticker 拿不到 level 时用它（否则报告里会出现 unknown 维度）
+                .type(ElementMatchers.named("net.minecraft.world.level.Level")
+                        .and(ElementMatchers.not(ElementMatchers.isInterface())))
+                .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
+                    LoaderBridge.ensureInjected(classLoader);
+                    return dynamicType.visit(Advice.to(LevelBlockEntityHostAdvice.class)
+                            .on(ElementMatchers.named("tickBlockEntities").and(ElementMatchers.takesArguments(0))));
+                })
                 // ②b 老版本（≤1.21.x）的按区块 tick 入口：类/方法不存在时匹配为空，无副作用
                 .type(ElementMatchers.named(LEVEL_CHUNK_CLASS))
                 .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
