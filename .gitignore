@@ -23,6 +23,10 @@ verify/libs/
 tools/
 
 # ---------- 服务端 / 运行时文件（万一在仓库目录里直接开服也别提交） ----------
+# ★ 注意：目录规则前面必须加斜杠锚定到仓库根！
+#   否则 `world/` 会匹配到任意层级的 world 目录 —— 自检替身里正好有
+#   verify/lag/net/minecraft/world/entity/Entity.java 与 …/world/level/chunk/LevelChunk.java，
+#   那两个文件会被静默忽略：本地有文件所以自检照样过，CI 检出后却缺文件、javac 直接编译失败。
 server.jar
 eula.txt
 server.properties
@@ -32,13 +36,17 @@ banned-players.json
 ops.json
 whitelist.json
 usercache.json
-logs/
-crash-reports/
-world/
-world_nether/
-world_the_end/
-libraries/
-versions/
+/logs/
+/crash-reports/
+/world/
+/world_nether/
+/world_the_end/
+/libraries/
+/versions/
+
+# 自检脚手架里的替身目录必须提交（再兜一层，防止将来又加上没锚定的目录规则）
+!verify/lag/net/minecraft/world/
+!verify/lag/net/minecraft/world/**
 
 # ---------- IDE / 编辑器 ----------
 .idea/
