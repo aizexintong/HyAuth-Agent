@@ -78,6 +78,25 @@ public class AgentMain {
     /** 为「没有聊天公钥的玩家」构造聊天解码器的接口（按玩家决定要不要强制安全档案）。 */
     private static final String CHAT_DECODER_CLASS = "net.minecraft.network.chat.SignedMessageChain$Decoder";
 
+    // ------------------------------------------------------------------
+    // 区块卡顿勘探 + 管理员命令（v1.0.3，见 README 第十五/十六章）
+    //
+    // 这一组切点是"按名字尽可能挂、挂不上就降级"的：原版类名/方法名随版本变动，
+    // 每个类别独立命中、独立播报，缺一个只影响那一类的数字，绝不连累鉴权主链路。
+    // ------------------------------------------------------------------
+
+    /** 区块 tick（随机刻、冰雪、闪电…）的宿主类。 */
+    private static final String SERVER_LEVEL_CLASS = "net.minecraft.server.level.ServerLevel";
+
+    /** 方块实体 tick 的宿主类（原版按区块遍历方块实体）。 */
+    private static final String LEVEL_CHUNK_CLASS = "net.minecraft.world.level.chunk.LevelChunk";
+
+    /** 服务端主类：整 tick 计时的宿主。 */
+    private static final String MINECRAFT_SERVER_CLASS = "net.minecraft.server.MinecraftServer";
+
+    /** 命令系统：管理员命令的接管点。 */
+    private static final String COMMANDS_CLASS = "net.minecraft.commands.Commands";
+
     /** 该接口里构造「未签名解码器」的静态工厂：unsigned(UUID, BooleanSupplier)。 */
     private static final String CHAT_DECODER_FACTORY = "unsigned";
 
@@ -302,6 +321,60 @@ public class AgentMain {
                                     .on(ElementMatchers.named(CHAT_DECODER_FACTORY)
                                             .and(ElementMatchers.takesArguments(2)))
                     );
+                })
+                // ==========================================================
+                // 区块卡顿勘探：按类别各挂一处，缺哪个版本项就只少那一类数字
+                // ==========================================================
+                // ① 区块 tick（随机刻、冰雪、闪电…）：勘探主干
+                .type(ElementMatchers.named(SERVER_LEVEL_CLASS))
+                .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
+                    LoaderBridge.ensureInjected(classLoader);
+                    System.out.println("[HyAuth] 命中区块 tick 宿主: " + typeDescription.getName()
+                            + "，挂载「区块 tick 计时 / 实体计时」勘探切面。");
+                    return dynamicType
+                            .visit(Advice.to(ChunkTickAdvice.class)
+                                    .on(ElementMatchers.named("tickChunk").and(ElementMatchers.takesArguments(2))))
+                            // 非乘客实体：怪、掉落物、矿车本体…
+                            .visit(Advice.to(EntityTickAdvice.class)
+                                    .on(ElementMatchers.named("tickNonPassenger")
+                                            .and(ElementMatchers.takesArguments(1))))
+                            // 乘客实体：船上/矿车上的玩家与生物
+                            .visit(Advice.to(PassengerTickAdvice.class)
+                                    .on(ElementMatchers.named("tickPassenger")
+                                            .and(ElementMatchers.takesArguments(2))))
+                            // 世界 tick：给空置域挖掘任务做心跳（与 MinecraftServer#tickServer 互相兜底）
+                            .visit(Advice.to(LevelTickAdvice.class)
+                                    .on(ElementMatchers.named("tick").and(ElementMatchers.takesArguments(1))));
+                })
+                // ② 方块实体 tick：熔炉、漏斗、刷怪笼…（按区块归因）
+                .type(ElementMatchers.named(LEVEL_CHUNK_CLASS))
+                .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
+                    LoaderBridge.ensureInjected(classLoader);
+                    System.out.println("[HyAuth] 命中区块类: " + typeDescription.getName()
+                            + "，挂载「方块实体计时」勘探切面。");
+                    return dynamicType.visit(Advice.to(BlockEntityTickAdvice.class)
+                            .on(ElementMatchers.named("tickBlockEntities").and(ElementMatchers.takesArguments(0))));
+                })
+                // ③ 整服 MSPT 基线
+                .type(ElementMatchers.named(MINECRAFT_SERVER_CLASS))
+                .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
+                    LoaderBridge.ensureInjected(classLoader);
+                    System.out.println("[HyAuth] 命中服务端主类: " + typeDescription.getName()
+                            + "，挂载「整服 MSPT 计时」勘探切面。");
+                    return dynamicType.visit(Advice.to(ServerTickAdvice.class)
+                            .on(ElementMatchers.named("tickServer").and(ElementMatchers.takesArguments(1))));
+                })
+                // ④ 管理员命令接管：控制台 / 游戏内 / RCON 的汇聚点
+                .type(ElementMatchers.named(COMMANDS_CLASS))
+                .transform((dynamicType, typeDescription, classLoader, module, protectionDomain) -> {
+                    LoaderBridge.ensureInjected(classLoader);
+                    System.out.println("[HyAuth] 命中命令系统: " + typeDescription.getName()
+                            + "，挂载「管理员命令接管」切面（命令根见配置 commands.roots）。");
+                    return dynamicType.visit(Advice.to(CommandAdvice.class)
+                            .on(ElementMatchers.named("performPrefixedCommand")
+                                    .or(ElementMatchers.named("performCommand"))
+                                    .and(ElementMatchers.takesArguments(2))
+                                    .and(ElementMatchers.returns(int.class))));
                 });
 
         try {

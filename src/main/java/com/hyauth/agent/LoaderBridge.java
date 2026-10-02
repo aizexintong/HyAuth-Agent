@@ -49,6 +49,16 @@ public final class LoaderBridge {
 
     private static final String CONFIG_CLASS = "com.hyauth.agent.config.ListManager";
 
+    /**
+     * 注入最多重试几轮。
+     *
+     * <p>为什么需要多轮：{@code defineClass} 会<b>立即</b>解析该类的父类与接口，
+     * 而辅助类之间是有依赖的（例如匿名内部类实现同包下的接口）。
+     * jar 条目顺序不保证"被依赖者先定义"，一轮注入会随机失败 —— 表现为
+     * "服务端能开服，但勘探/鉴权某块静默失效"。多轮重试把顺序问题变成非问题。
+     */
+    private static final int MAX_INJECTION_ROUNDS = 4;
+
     private static final Map<ClassLoader, Boolean> HANDLED =
             Collections.synchronizedMap(new WeakHashMap<ClassLoader, Boolean>());
 
@@ -88,23 +98,60 @@ public final class LoaderBridge {
                 System.err.println("[HyAuth] 未在 Agent 包中枚举到可注入的类，跳过注入。");
                 return;
             }
-            for (String entry : entries) {
-                byte[] bytes = readClassBytes("/" + entry);
-                if (bytes == null) {
-                    continue;
+
+            // ★ 多轮注入：辅助类之间会互相引用，而 JVM 在 defineClass 时**立即**解析
+            //   父类/接口（匿名类的接口尤其明显）。jar 条目顺序不保证先定义被依赖者，
+            //   所以这里失败就放到下一轮重试，而不是直接判死。
+            //   （v1.0.3 实测：ChunkLagSampler$2 实现 LongKeyMap$Visitor，
+            //     若先定义前者就会 NoClassDefFoundError，导致整个勘探功能静默失效。）
+            List<String> pending = new ArrayList<String>(entries);
+            List<String> failed = new ArrayList<String>();
+            int injected = 0;
+            for (int round = 0; round < MAX_INJECTION_ROUNDS && !pending.isEmpty(); round++) {
+                List<String> deferred = new ArrayList<String>();
+                for (String entry : pending) {
+                    byte[] bytes = readClassBytes("/" + entry);
+                    if (bytes == null) {
+                        continue;
+                    }
+                    String className = entry.substring(0, entry.length() - ".class".length()).replace('/', '.');
+                    try {
+                        defineClass.invoke(target, className, bytes, 0, bytes.length);
+                        injected++;
+                    } catch (Throwable defineError) {
+                        deferred.add(entry);
+                        if (round == MAX_INJECTION_ROUNDS - 1) {
+                            failed.add(className);
+                            System.err.println("[HyAuth] 注入辅助类失败: " + className + " -> "
+                                    + rootCause(defineError));
+                        }
+                    }
                 }
-                String className = entry.substring(0, entry.length() - ".class".length()).replace('/', '.');
-                defineClass.invoke(target, className, bytes, 0, bytes.length);
+                pending = deferred;
             }
-            System.out.println("[HyAuth] 已把 " + entries.size() + " 个 Agent 辅助类注入服务端类加载器: " + target);
+
+            System.out.println("[HyAuth] 已把 " + injected + " 个 Agent 辅助类注入服务端类加载器: " + target);
+            if (!failed.isEmpty()) {
+                System.err.println("[HyAuth] 有 " + failed.size()
+                        + " 个辅助类注入失败（相关功能不可用，其余功能不受影响）: " + failed);
+            }
 
             // 用注入后的副本初始化配置（注入副本才是切面实际使用的那一份）
             Class<?> listManager = target.loadClass(CONFIG_CLASS);
             listManager.getMethod("init").invoke(null);
         } catch (Throwable t) {
-            System.err.println("[HyAuth] Agent 类注入失败，切面调用将在运行期报错: " + t);
+            System.err.println("[HyAuth] Agent 类注入失败，切面调用将在运行期报错: " + rootCause(t));
             System.err.println("[HyAuth] 原版 Bundler 启动时请确认已加入 --add-opens java.base/java.lang=ALL-UNNAMED");
         }
+    }
+
+    /** 剥掉反射包装，拿到真正的失败原因（日志里才有诊断价值）。 */
+    private static Throwable rootCause(Throwable t) {
+        Throwable current = t;
+        while (current instanceof java.lang.reflect.InvocationTargetException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     /** 从 Agent jar 枚举需要注入的 class 条目（含内部类）。 */

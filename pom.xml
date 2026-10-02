@@ -12,6 +12,18 @@
     <name>HyAuth-Agent</name>
     <description>Minecraft 原版服务端正版 / 外置（LittleSkin）混合鉴权 Java Agent</description>
 
+    <licenses>
+        <license>
+            <name>GNU General Public License v3.0 or later</name>
+            <url>https://www.gnu.org/licenses/gpl-3.0.html</url>
+            <distribution>repo</distribution>
+            <comments>
+                Copyleft：任何分发/衍生作品都必须同样以 GPL-3.0-or-later 开源并提供对应源码。
+                完整许可证文本见仓库根目录 LICENSE。
+            </comments>
+        </license>
+    </licenses>
+
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>

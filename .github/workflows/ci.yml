@@ -30,15 +30,19 @@ jobs:
       - name: 构建 Agent jar
         run: mvn -B -ntp clean package
 
-      - name: 自检 1/3 · 类加载器隔离（切面真的挂上了）
+      - name: 自检 1/4 · 类加载器隔离（切面真的挂上了）
         shell: pwsh
         run: ./verify/loaderiso.ps1
 
-      - name: 自检 2/3 · 外置账号聊天广播（逐接收者分流）
+      - name: 自检 2/4 · 外置账号聊天广播（逐接收者分流）
         shell: pwsh
         run: ./verify/chat.ps1
 
-      - name: 自检 3/3 · Authlib 3/6/10 兼容与鉴权分流 + 热重载
+      - name: 自检 3/4 · 区块卡顿勘探 + 管理员命令（替身内联真实切面）
+        shell: pwsh
+        run: ./verify/lag.ps1
+
+      - name: 自检 4/4 · Authlib 3/6/10 兼容与鉴权分流 + 热重载
         shell: pwsh
         run: ./verify/verify.ps1
 

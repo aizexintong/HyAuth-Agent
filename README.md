@@ -25,6 +25,10 @@
 * [十二、排错手册](#十二排错手册)
 * [十三、FAQ](#十三faq)
 * [十四、已知限制与后续可做](#十四已知限制与后续可做)
+* [十五、区块卡顿勘探（纯服务端，无需客户端 Mod）](#十五区块卡顿勘探纯服务端无需客户端-mod)
+* [十六、管理员命令速查（名单 + 勘探）](#十六管理员命令速查名单--勘探)
+* [十七、许可证与致谢](#十七许可证与致谢)
+* [十八、空置域挖掘（命令版"世吞"）](#十八空置域挖掘命令版世吞)
 * [附录 A：日志速查](#附录-a日志速查)
 * [附录 B：文件清单](#附录-b文件清单)
 
@@ -51,6 +55,17 @@ HyAuth-Agent 只做一件事：**接管服务端"这个玩家到底是谁"的那
 * **宽版本兼容**：一份字节码同时适配 Authlib 3.x / 6.x / 10.x 三代 API（见[兼容矩阵](#authlib-兼容矩阵)）。
 * **原版 Bundler 适配**：能跑在官方 `server.jar`（1.18+ 的 Bundler 形态）上，无需解包服务端。
 
+v1.0.4 起还内置了两件**纯服务端**的事（同一个 jar，不需要任何额外组件）：
+
+* **区块卡顿勘探**：按区块分项采样 tick 耗时（区块 tick / 实体 / 方块实体 / 整服 MSPT），
+  管理员一条命令扫描，报告直接列出**异常区块的坐标范围**，聊天里点一下就 tp 到现场 ——
+  不需要客户端 Mod、不发网络包，见[第十五章](#十五区块卡顿勘探纯服务端无需客户端-mod)；
+* **管理员命令**：名单管理命令化（`/hy add` / `off` / `del` / `whois` / `list` / `reload` / `status`），
+  离线名单**自动生成 UUIDv7 并在发证前扫全服已有 UUID 查重**，见[第十六章](#十六管理员命令速查名单--勘探)。
+* **空置域挖掘（命令版"世吞"）**：对角选两点 → 预演 → 确认执行，服务端用原版 `/fill` 分三阶段
+  （外圈上方清空 → 四边防爆沟 → 内圈清空）把区域挖空置域，带可调节流、进度回报与随时中止 ——
+  小服务器不用真造世吞，见[第十八章](#十八空置域挖掘命令版世吞)。
+
 ---
 
 ## 二、已验证 / 未验证范围
@@ -76,10 +91,18 @@ HyAuth-Agent 只做一件事：**接管服务端"这个玩家到底是谁"的那
 | **真实玩家完整登录（真实客户端 + 公网服务端）** | ⚠️ 部分联调 | **离线名单玩家与正版玩家已在用户真实环境跑通**（见上）；LittleSkin 外置账号登录仍待实测。请首次上线时按[排错手册](#十二排错手册)核对日志 |
 | **MC 1.20.x 及更早的"离线名单握手改写"** | ⚠️ 未实现 | 这些版本的 `net.minecraft.*` 是混淆的，挂钩需要额外映射；此时离线名单**退化为仅服务端放行**（[见 §7.3](#73-已知边界)） |
 | **MC 1.18 ~ 1.21.x 的 Bundler 形态** | ⚠️ 未逐一实测 | `LoaderBridge` 注入逻辑与版本无关，但早期 Bundler 会 fork 子进程，行为可能不同；26.3 已实测 |
+| **区块卡顿勘探（采样 / 聚类 / 报告 / 传送）** | ✅ 离线回归实测（34/34 断言） | `verify\lag.ps1`：把 6 个真实切面内联进 26.x 形状替身，断言相邻异常区块合并为坐标范围、报告行带 `ClickEvent.RunCommand`、tp 落点交给原版 `/tp` 且 y 来自 `MOTION_BLOCKING` 高度图、实体/乘客/方块实体按区块归因、嵌套口径运行期探测、非本命令根不被吞掉（见 [§11.3](#113-区块卡顿勘探--管理员命令回归测试改勘探命令相关代码必跑)） |
+| **管理员命令接管（控制台 / 游戏内 / RCON）** | ✅ 离线回归实测 | 同上的 `verify\lag.ps1`：断言 `/hy …` 被接管（返回值 1）、权限不足拒绝、`/tp` 等非本命令根原样交给原版 |
+| **UUIDv7 + 发证前查重** | ✅ 离线回归实测 | 同上：断言生成的是 v7（版本半字节 = 7）、名字已在 `usercache.json` 里时默认拦下且不写配置、指定 UUID 时沿用、`/hy whois` 报出来源与原版离线算法 UUID |
+| **辅助类注入容错与多轮重试** | ✅ 离线回归实测 | `verify\loaderiso.ps1`：53 个辅助类全部注入成功（该用例曾抓出"注入顺序导致整块功能静默失效"的隐患，见 [§8.3](#83-原版-bundler-与-loaderbridge)） |
+| **勘探功能在真实 26.3 服务端上的表现** | ⚠️ 待真机实测 | 切点名称按 26.x 未混淆类名挂钩，且每类独立降级；上线后用 `/hy lag status` 逐条核对"可挂载"，并观察日志里四条"命中…切面"是否都出现 |
+| **空置域挖掘（计划 / 节流 / 中止 / 安全上限）** | ✅ 离线回归实测 | `verify\lag.ps1`：真实 `ClearJob` + 真实切面，断言 preview 不动世界、每条 fill ≤32768 且分层连续无重叠、三阶段命令与 forceload 加卸载、节流（10 tick 只派发 2 条）、`stop` 后不再派发、权限门槛与 `confirm` 缺一不可、y 范围按建筑高度夹取（见 [§18](#十八空置域挖掘命令版世吞)） |
+| **勘探/挖掘在真实客户端 + 真实服务端上的联调** | ⚠️ 未做 | 需要真实 26.3 服务端与存档；请在测试存档上先 `/hy clear preview` 核对坐标与体积，再小区域试挖一次 |
 
 > 结论：**分流核心（hasJoinedServer）、26.3 服务端开服、Bundler 类加载器隔离下的切面挂载、
 > 离线名单的真实客户端登录与聊天、LittleSkin 外置账号的登录与聊天密钥验签都是硬性验证过的**；
 > 三类玩家（正版 / 外置 / 离线名单）已在同一台真实服务器上同时跑通。
+> v1.0.4 的勘探与命令功能已完成**离线回归验证**（真实切面 + 26.x 形状替身），真机表现待上线后按上表核对。
 
 ---
 
@@ -237,7 +260,7 @@ Premain-Class: com.hyauth.agent.AgentMain
 
 | 工作流 | 触发 | 做什么 |
 | --- | --- | --- |
-| `ci.yml` | push 到 `main` / 提 PR / 手动 | `mvn clean package` → 依次跑 `verify\loaderiso.ps1`、`verify\chat.ps1`、`verify\verify.ps1` → 上传 `HyAuth-Agent-*.jar` 与 `BUILD.txt` 作为 Actions 产物 |
+| `ci.yml` | push 到 `main` / 提 PR / 手动 | `mvn clean package` → 依次跑 `verify\loaderiso.ps1`、`verify\chat.ps1`、`verify\lag.ps1`、`verify\verify.ps1` → 上传 `HyAuth-Agent-*.jar` 与 `BUILD.txt` 作为 Actions 产物 |
 | `release.yml` | **push 到 `main`**（自动把修订号 +1）/ 推送 `v*` 标签 / 手动触发（可选 patch / minor / major） | 先算版本号（拿最后一个 `v*` 标签递增）→ 构建 + 同上三套自检 → 计算 SHA256 → 打标签并创建 GitHub Release，附 `HyAuth-Agent-1.0.0.jar`、带版本号的副本（如 `HyAuth-Agent-v1.0.3.jar`）与 `BUILD.txt` |
 
 **平时什么都不用做**：往 `main` 推一次代码，就会自动发布一个修订号自增的版本（`v1.0.3` → `v1.0.4` → …）。
@@ -596,7 +619,39 @@ java /tmp/OffUUID.java 离线玩家名
   "chat_key_strict": false,
   "bypass_signed_commands": true,
   "offline_chat_exempt": true,
-  "debug": false
+  "debug": false,
+  "chunk_lag": {
+    "resident": true,
+    "ewma_alpha": 0.05,
+    "flag_threshold_ms": 1.0,
+    "flag_relative_factor": 6.0,
+    "scan_default_seconds": 30,
+    "report_top": 10,
+    "max_clusters": 8,
+    "max_tracked_chunks": 20000
+  },
+  "commands": {
+    "roots": [ "hy", "ha", "hyauth", "lag" ],
+    "op_level": 2
+  },
+  "clear": {
+    "op_level": 3,
+    "interval_ticks": 4,
+    "fills_per_step": 2,
+    "load_wait_ticks": 5,
+    "kill": "items",
+    "min_y": -64,
+    "top_y": 63,
+    "above_height": 256,
+    "trench": true,
+    "trench_block": "sand",
+    "batch_chunks": 4,
+    "max_side": 2048,
+    "max_volume": 500000000,
+    "announce_percent": 10,
+    "break_bedrock": true,
+    "bedrock_top_y": -60
+  }
 }
 ```
 
@@ -617,6 +672,34 @@ java /tmp/OffUUID.java 离线玩家名
 | `bypass_signed_commands` | bool | 否 | `true` | 让**离线名单玩家**的指令按"未签名"执行（修复 `/say`、`/me`、`/msg` 报红字不生效），见 [§8.6](#86-离线名单玩家发不出指令missing-profile-public-key) |
 | `offline_chat_exempt` | bool | 否 | `true` | 只对**离线名单玩家**豁免 `enforce-secure-profile`，让他们能发未签名聊天；**不需要关闭服务器的全局开关**，正版玩家仍强制校验。见 [§8.6](#86-离线名单玩家发不出指令missing-profile-public-key) |
 | `debug` | bool | 否 | `false` | 打印 204（未登录）等调试信息 |
+| `chunk_lag` | object | 否 | 见下 | 区块卡顿勘探参数，见[第十五章](#十五区块卡顿勘探纯服务端无需客户端-mod) |
+| `chunk_lag.resident` | bool | 否 | `true` | 常驻采样开关（每次启动读一次；`/hy reload` 也会同步，命令里可随时 `lag on\|off`） |
+| `chunk_lag.ewma_alpha` | number | 否 | `0.05` | 近期均值（EWMA）平滑系数，越大越"跟手"，范围 `0.001~1` |
+| `chunk_lag.flag_threshold_ms` | number | 否 | `1.0` | 判定"异常区块"的绝对阈值（**合计 ms / 区块 tick**） |
+| `chunk_lag.flag_relative_factor` | number | 否 | `6.0` | 相对判据：合计 ≥ 全体中位数 × 该倍数也算异常（自适应不同机器） |
+| `chunk_lag.scan_default_seconds` | int | 否 | `30` | `/hy lag scan` 不带秒数时的默认时长（1~3600） |
+| `chunk_lag.report_top` | int | 否 | `10` | 单区块榜条数（1~200） |
+| `chunk_lag.max_clusters` | int | 否 | `8` | 报告最多列出多少组"坐标范围"（1~100） |
+| `chunk_lag.max_tracked_chunks` | int | 否 | `20000` | 常驻窗口最多跟踪多少区块（100~2000000；超限不再纳入新区块并提示） |
+| `commands.roots` | string[] | 否 | `["hy","ha","hyauth","lag"]` | 管理员命令的根命令名（小写字母/数字/下划线，1~16 位）；`lag` 会被自动保留作勘探快捷方式 |
+| `commands.op_level` | int | 否 | `2` | 执行管理员命令所需的原版权限等级（0~4；2 = OP，控制台/RCON 天然是 4） |
+| `clear` | object | 否 | 见下 | 空置域挖掘参数，见[第十八章](#十八空置域挖掘命令版世吞) |
+| `clear.op_level` | int | 否 | `3` | 执行空置域挖掘所需的权限等级（**默认比其它命令更高**，因为是不可撤销的删方块） |
+| `clear.interval_ticks` | int | 否 | `4` | 每多少 tick 推进一步（1~200；越大越"温柔"） |
+| `clear.fills_per_step` | int | 否 | `2` | 每个节拍最多推进几步（1~64） |
+| `clear.load_wait_ticks` | int | 否 | `5` | `forceload add` 之后等几个 tick 再开始 fill（等区块真正加载） |
+| `clear.kill` | string | 否 | `items` | 区域内的实体清理：`none` / `items`（只清掉落物）/ `all`（清所有非玩家实体） |
+| `clear.min_y` | int | 否 | `-64` | 内圈清空的下界 y（会按该维度真实建筑高度夹取） |
+| `clear.top_y` | int | 否 | `63` | "地面"层：这一层及以上按外圈清空、以下按内圈清空 |
+| `clear.above_height` | int | 否 | `256` | 上界相对 `top_y` 的高度（256 → 主世界挖到 y=319） |
+| `clear.trench` | bool | 否 | `true` | 是否挖防爆沟（阶段 2） |
+| `clear.trench_block` | string | 否 | `sand` | 防爆沟填充方块 |
+| `clear.batch_chunks` | int | 否 | `4` | 每批多少区块的边长（4 → 4x4 区块 = 64x64 方块一批） |
+| `clear.max_side` | int | 否 | `2048` | 选区边长上限（方块），超过则拒绝预演 |
+| `clear.max_volume` | long | 否 | `500000000` | 单次任务的清理体积上限（方块），超过则拒绝预演 |
+| `clear.announce_percent` | int | 否 | `10` | 进度播报间隔（百分比） |
+| `clear.break_bedrock` | bool | 否 | `true` | **基岩开关**：`true` 连基岩一起挖掉（底部是虚空）；`false` 保留基岩层，自动从 `bedrock_top_y` 的上一格开始清 |
+| `clear.bedrock_top_y` | int | 否 | `-60` | 基岩层顶面 y（只在 `break_bedrock=false` 时用来算保留基岩后的挖掘下界；下界可设 `4`） |
 
 ### 6.3 行为边界
 
@@ -627,8 +710,9 @@ java /tmp/OffUUID.java 离线玩家名
 
 ### 6.4 热重载（改名单不用重启服务端）
 
-**没有命令、没有开关：编辑文件 → 保存 → 约 0.5 秒后自动生效。** Agent 里有一个守护线程
-`HyAuth-ConfigWatcher` 用 `WatchService` 监视配置所在**目录**（不是文件本身），
+**编辑文件 → 保存 → 约 0.5 秒后自动生效**（v1.0.4 起也可以用命令改：`/hy add`、`/hy off`、`/hy del`，
+它们同样是"改文件 + 立刻重载"，见[第十六章](#十六管理员命令速查名单--勘探)）。
+Agent 里有一个守护线程 `HyAuth-ConfigWatcher` 用 `WatchService` 监视配置所在**目录**（不是文件本身），
 所以无论你是原地改写、还是"删掉重建 / 改名覆盖"，都能感知到。
 
 ```bash
@@ -762,9 +846,20 @@ Minecraft 客户端只有在服务端要求验证时才会调用会话服务，*
       两侧都能看到服务端自带的 gson / authlib，不会 NoClassDefFoundError。
 ```
 
-### 8.4 切面类字节码的硬性约束（必读）
+**注入是逐类、多轮的**（v1.0.4 修掉的一个隐患）：`defineClass` 在定义某个类的**当场**就会解析它的
+父类与接口 —— 而辅助类之间互相引用（例如匿名内部类实现同包下的接口：`ChunkLagSampler$2`
+实现 `LongKeyMap$Visitor`）。jar 条目顺序（大致按字母）**不保证被依赖者先定义**，
+于是"ChunkLagSampler 排在 LongKeyMap 前面"就会 `NoClassDefFoundError`，表现为
+**服务端照常开服、但勘探/命令整块静默失效**。现在：
 
-**切面类（`HasJoinedAdvice` 等）的字节码里，不允许出现任何 authlib 类型** —— 包括
+* 一轮里失败的类会**留到下一轮重试**（最多 4 轮），顺序问题由此变成非问题；
+* 仍然失败的类会**逐个打印原因**（剥掉反射包装后的真实 cause），其余类不受影响、继续完成注入；
+* 注入完成后打印 `已把 N 个 Agent 辅助类注入服务端类加载器`，N 明显偏小时就该警惕
+  （v1.0.4 是 58 个）。
+
+### 8.4 切面类字节码的硬性约束（必读）
+**切面类（`HasJoinedAdvice`、`ChunkTickAdvice` 等）的字节码里，不允许出现任何服务端类型
+（`net.minecraft.*`）或 authlib 类型** —— 包括
 方法签名、`throws`、`new`、`instanceof`、`X.class`，**一个都不行**。
 
 原因（这是 v1.0.1 修掉的一个致命 bug，代价是"服务端一切正常但名单完全不生效"）：
@@ -1118,6 +1213,55 @@ pwsh -File verify\loaderiso.ps1
 `verify\loaderiso\MissingTypeUser.java` 与 `Caller.java` 是两个诊断探针，用来固化
 [§8.4](#84-切面类字节码的硬性约束必读) 那条实测边界（"自己引用" vs "只是调用"）。
 
+#### 11.3 区块卡顿勘探 + 管理员命令回归测试（**改勘探/命令相关代码必跑**）
+
+```powershell
+pwsh -File verify\lag.ps1
+```
+
+它按 26.x 的真实形状造一套服务端替身（`ServerLevel` / `LevelChunk` / `Entity` / `MinecraftServer` /
+`Commands` / `CommandSourceStack` / `Component` / `Style` / `ClickEvent.RunCommand`…），
+把 Agent 真正的切面用 Byte Buddy 内联进去，然后跑**真正的辅助类**
+（`ChunkLagSampler` / `LagReport` / `AdminCommands` / `ClearJob` / `ConfigWriter` / `UUIDv7` / `ExistingUuidScan`），
+断言 **78 项**，覆盖：
+
+```text
+[PASS] 全部 14 个 *Advice 切面类字节码中都不含 net/minecraft（§8.4 硬约束回归）
+[PASS] 相邻的两个高耗时区块被合并成一组坐标范围 x[0..31] z[0..15]（8ms/区块）
+[PASS] 报告写明了耗时口径（合计 = 区块 tick + 实体 + 方块实体）
+[PASS] 报告行带可点击传送事件（ClickEvent.RunCommand = /hy lag tp 1）
+[PASS] 实体耗时按区块归因后计入该组均值 / 整服 MSPT 基线来自 MinecraftServer#tickServer
+[PASS] 传送被交给原版 /tp（未自行实现落点与区块加载）
+[PASS] 落点 y 来自地表高度图（MOTION_BLOCKING）
+[PASS] 非本命令根（/tp）原样交给原版，绝不被吞掉
+[PASS] 权限不足（等级 0）时拒绝执行并说明原因
+[PASS] 自动生成的 UUID 是 UUIDv7（版本半字节 = 7）
+[PASS] 名字在 usercache.json 里已有身份时：默认不发新 UUID、不写配置（防止换人丢存档）
+[PASS] 「/hy whois」能报出已有身份来自 usercache.json 与原版离线算法 UUID
+[PASS] 探测到方块实体 tick 嵌在区块 tick 内部 → 合计不再重复计（口径自动切换）
+[PASS] tickPassenger / tickBlockEntities 的耗时被归因到对应区块
+[PASS] 「/hy lag status」打印各切点能力探测结果
+[PASS] 空置域挖掘权限门槛更高：等级 2 被拒绝 / start 不带 confirm 不开始
+[PASS] 四种选区写法都生效：<x1 z1 x2 z2> / <x2 z2>（以站位为角点1）/ <边长>（以你为中心）/ pos1+pos2
+[PASS] 选完自动预演，且预演里带可点击的「确认开始挖掘」
+[PASS] 控制台下缺站位时明确提示改用四个数字；dim 会校验维度并支持 overworld 这类简写
+[PASS] preview 阶段一条原版命令都没派发（预演不动世界）
+[PASS] 每条 fill ≤ 32768 方块，且分层连续、不重叠、不留空隙（阶段 1 与阶段 3 各断言一次）
+[PASS] 三阶段命令都在：forceload add/remove、外圈清空、四边填沙、内圈清空
+[PASS] 节流生效（10 个 tick 只派发 2 条 fill）/ stop 后不再派发任何 fill
+[PASS] y 范围会按维度建筑高度夹取（下界/末地那种 0..255）
+[PASS] 掉落物清理用体积选择器限定在本区域内
+[PASS] 省事写法：/hy add A B 批量、/hy + 名字、/hy - 名字、/hy ls、/hy id 名字
+[PASS] /hy off A B 批量发离线身份证（每个名字独立查重）
+[PASS] 基岩开关：break_bedrock=false 时保留基岩层（内圈从 y=-59 起清）；=true 时连基岩一起挖
+[PASS] 勘探省事写法：/lag 无参＝直接出报告；/lag 1 ＝采样 1 秒
+```
+
+> 这套测试同时是[§8.4](#84-切面类字节码的硬性约束必读)硬约束的**机器化护栏**：
+> 它会直接扫描 Agent jar 里所有 `*Advice.class` 的常量池，一旦出现 `net/minecraft` 就判失败。
+> 另外它还会做耗时断言 —— 替身里的"耗时"是 `Thread.sleep`，Windows 计时器粒度约 1ms，
+> 所以断言用的是**区间**（例如"约 3ms"判 `[1.5, 3.5]`），照样能证明这笔耗时被记到了正确的区块/分项上。
+
 此外还有两项**真实服务端**验证：
 
 1. 官方 26.3 `server.jar` + Agent 开服 → `Done (0.714s)!`，命中 `MinecraftServicesSessionService`，
@@ -1197,13 +1341,432 @@ pwsh -File verify\loaderiso.ps1
 * 离线名单玩家暂时没有皮肤注入能力（可后续在名单条目里加可选 `textures` 字段）。
 * 未在 Paper/Spigot 等非原版服务端上验证。
 * 未在真实客户端 + 公网服务端上做完整登录联调（见[第二节](#二已验证--未验证范围)）。
+* 区块卡顿勘探与管理员命令同样只认 26.x 的未混淆类名；更早版本对应类别自动降级为 0
+  （`/hy lag status` 会逐个切点告诉你哪个挂得上），不会影响鉴权主链路。
 
 **后续可做**
 
 1. `offline_players[].textures`：为离线玩家注入皮肤属性（可复用现有验签与构造链路）；
 2. 更早版本的登录挂钩映射（1.20.5 ~ 1.21.x）；
 3. 把 26.3 服务端开服验证与握手挂钩验证脚本化进 `verify/`；
-4. 名单级限速/审计日志（谁在什么时间以哪个 UUID 登录）。
+4. 名单级限速/审计日志（谁在什么时间以哪个 UUID 登录）；
+5. 勘探数据落盘（CSV/JSON）与跨重启基线对比（当前刻意不落盘：口头报告 + 点击传送已够用，见[第十五章](#十五区块卡顿勘探纯服务端无需客户端-mod)）；
+6. 给命令加 Tab 补全（需要往 Brigadier 注册节点，会引入 `com.mojang.brigadier` 的类型引用，风险与收益要再权衡）。
+
+---
+
+## 十五、区块卡顿勘探（纯服务端，无需客户端 Mod）
+
+**目标**：服务器卡的时候，管理员用一条命令就能知道"是哪个区块在吃 tick"，并**点一下直接 tp 到现场**。
+全程只需要服务端装了这个 Agent —— 不需要客户端 Mod、不需要插件、不改协议、不传数据给客户端。
+
+> 思路来源：这个功能的**分项归因**想法借鉴了 [MsptMap](https://github.com/Drizzle379/MsptMap)
+> （一个把每区块 MSPT 画到 Xaero 世界地图上的 Fabric Mod）。区别是它不是 Mod，而是本 Agent 的一个切面：
+> 数据不出服务端，报告直接给管理员，落地方式从"客户端热力图"换成了"坐标范围 + 点击传送"。
+> **只借鉴了思路，没有使用其任何代码。**
+
+### 15.1 它量了什么
+
+四个类别各挂一处切面，**每一类都可独立降级**（版本里没这个方法就那一类是 0，其余照常）：
+
+| 类别 | 切点 | 归因方式 | 能看出什么 |
+| --- | --- | --- | --- |
+| 区块 tick | `ServerLevel#tickChunk(LevelChunk,int)` | 该区块 | 随机刻、冰雪、闪电、区块级维护任务 |
+| 实体（非乘客） | `ServerLevel#tickNonPassenger(Entity)` | 实体所在区块 | 怪、掉落物、矿车本体、经验球 |
+| 实体（乘客） | `ServerLevel#tickPassenger(Entity,Entity)` | **乘客**所在区块 | 船/矿车/骑乘上的玩家与生物 |
+| 方块实体 | `LevelChunk#tickBlockEntities()` | 该区块 | 熔炉、漏斗、刷怪笼、村民工作站 |
+| 整服 MSPT | `MinecraftServer#tickServer(BooleanSupplier)` | 全局基线 | 大家平时说的"服务端多少 ms 一跳" |
+
+**为什么要有 MSPT 基线**：区块 tick 都很小、MSPT 却很高 ⇒ 卡在别的环节（网络、存档、实体总量），
+这时候盯着区块榜会误判。报告第一行就给出这个对比。
+
+**关于"合计"会不会重复计**：不同版本里方块实体 tick 可能被包在区块 tick 内部。
+本项目**不靠版本假设**，而是在运行期探测调用栈：一旦发现嵌套，就把方块实体耗时从合计里去掉，
+并在报告里写明当前用的是哪种口径。
+
+### 15.2 用法（30 秒上手）
+
+```text
+/hy lag scan 30      ← 采 30 秒（不带秒数用配置里的默认值）
+                     ← 到点自动出报告；也可以 /hy lag list 随时看当前累计
+```
+
+报告长这样（游戏内聊天里每一行都能点，控制台里是同样的文字 + 等价命令）：
+
+```text
+[HyAuth] ===== HyAuth 区块卡顿勘探 · 扫描完成 =====
+采样 30.0s / 602 tick · 覆盖 1 个维度 2412 个区块 · 全服 MSPT 均值 18.42ms（近期 21.77ms，峰值 143.1ms）
+区块 tick 耗时分布: 中位 0.081ms · P95 0.423ms · 单次峰值 31.20ms · 口径：合计 = 区块 tick + 实体 + 方块实体
+异常判据: 合计 ≥ 1.00ms 或 ≥ 中位数 6.0 倍 → 命中 37 个区块，合并为 3 组范围
+  #1 主世界 x[-320..-301] z[64..95]  42 区块  合计均值 8.43ms 峰值 31.20ms  [区块 1.20 | 实体 7.23(≈137只) | 方块实体 0.00]  点击传送
+  #2 下界 x[96..111] z[-48..-33]  16 区块  合计均值 4.10ms 峰值 12.88ms  [区块 0.42 | 实体 3.68(≈64只) | 方块实体 0.00]  点击传送
+  #3 主世界 x[12..19] z[400..407]  8 区块  合计均值 2.31ms 峰值 9.04ms  [区块 0.05 | 实体 0.02(≈0只) | 方块实体 2.24]  点击传送
+可用: /hy lag top [N] 单区块榜 · /hy lag tp <序号> 传送到某一组 · /hy lag here 看脚下这块 · /hy lag clear 清空重来
+```
+
+* **鼠标悬停**任意一行 → 显示该范围的维度、方块范围、中心坐标、分项耗时明细；
+* **点一下** → 以你自己的身份执行 `/hy lag tp <序号>`，直接落到范围中心的地表；
+* 控制台/RCON 执行时，点击事件没有意义，但那一行会附带 `[命令: /hy lag tp 1]`，复制即可。
+
+`/hy lag top 10` 是"单区块榜"（按单次峰值排序，每行同样可点）：
+
+```text
+  #1  区块(-19,5) 方块(-304,80)  峰值 31.20ms 均值 24.11ms  [区块 12.40 | 实体 11.71(≈137只) | 方块实体 0.00]  点击传送
+```
+
+### 15.3 判定"异常"的两条规则
+
+```text
+命中 = 合计 ≥ chunk_lag.flag_threshold_ms (=1.0ms)
+     或 合计 ≥ 全体区块中位数 × chunk_lag.flag_relative_factor (=6)
+       且 合计 ≥ 0.15ms（避免"中位数极小"时把一切正常区块都算进来）
+```
+
+绝对阈值管"真的重"，相对倍数管"你这台机器/这个存档的常态"。
+两者都可在配置里改（见 [§6.2](#62-字段说明)）。命中后的区块会按 **8 邻接**合并成"坐标范围"（矩形包围盒），
+所以你会看到 `x[-320..-301] z[64..95]` 这样的范围，而不是几十行离散坐标。
+
+### 15.4 两种模式：常驻 + 按需
+
+| 模式 | 开关 | 特点 |
+| --- | --- | --- |
+| **常驻** | 默认开，`/hy lag on\|off`、也可以写配置 | 一直在累计，随时 `/hy lag list` 就能看"从启动到现在"的均值与近期值（EWMA）；开销是每区块/每实体 tick 两次 `nanoTime` + 一次无装箱哈希查找 |
+| **按需** | `/hy lag scan [秒]` | 独立开一个干净窗口，到点**自动出报告**并保留结果供 `/hy lag tp` 使用；`/hy lag stop` 可提前结束并立刻出报告 |
+
+`/hy lag clear` 清空两个窗口重新来；`/hy lag status` 显示采样状态与**每个切点的能力探测**
+（哪个版本项挂不上，一眼可见）。
+
+### 15.5 传送是怎么做的（为什么不自研落点）
+
+`/hy lag tp` 只负责"算落点"，**真正执行的是原版命令**：
+
+```text
+同维度   → /tp @s <x> <地表y> <z>
+跨维度   → /execute in <维度> run tp @s <x> <地表y> <z>
+拿不到地表高度时 → /execute in <维度> run spreadplayers <x> <z> 0 1 false @s   （交给原版找地表，比硬塞 y=100 安全）
+```
+
+这样区块加载、跨维度、坐骑/乘客、位置同步、可见性全都不用自己实现（原版 `/tp` 本来就都做对了），
+版本差异面也小得多。地表高度用 `Level#getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)` 算，
+维度对象在采样时顺手记下（所以跨维度也能在**目标维度**的地表高度图上算落点）。
+
+### 15.6 开销与安全边界
+
+* **采样开销**：热路径只有 `System.nanoTime()` ×2、一次无装箱长整型哈希查找、几次浮点运算；
+  全部在服务端主线程内联执行，不加锁、不分配（对象只在第一次见到某区块时创建）。
+  不想让它跑就 `/hy lag off`（按需扫描仍可用）。
+* **内存上限**：常驻窗口默认最多跟踪 20000 个区块（`max_tracked_chunks`），超限后不再纳入新区块并提示一次，
+  不会无限增长。
+* **失败即降级**：任何反射取数失败只影响那一笔样本；切面挂载失败只影响那一类数字，
+  **绝不触碰鉴权主链路**（鉴权切面与勘探切面彼此独立）。
+* **不出服务端**：没有任何网络包、没有客户端 Mod，报告只发给执行命令的人与控制台。
+
+---
+
+## 十六、管理员命令速查（名单 + 勘探）
+
+命令的**根命令名可配置**（`commands.roots`，默认 `hy` / `ha` / `hyauth`，另有 `lag` 作勘探快捷方式）。
+所有命令都需要**原版权限等级 ≥ `commands.op_level`（默认 2 = OP）**；控制台与 RCON 天然满足。
+
+> **为什么是"短命令"而不是插件式命令**：本 Agent 不往 Brigadier 注册节点，而是在
+> `Commands#performPrefixedCommand` 这个"命令字符串的唯一汇聚点"拦截自己认得的首词 ——
+> 控制台 / 游戏内 / RCON 三种来源一次覆盖，而且**不可能与任何原版或插件的命令撞名**。
+> 代价是**没有 Tab 补全**（这是刻意的取舍，见[第十四章](#十四已知限制与后续可做)第 6 条）。
+
+### 16.1 名单管理（改完自动热重载，不用重启）
+
+| 命令 | 作用 |
+| --- | --- |
+| `/hy add <名字> [更多…]` | 加入 **LittleSkin 外置**名单，**支持一次多个**；别名 `/hy + <名字>` |
+| `/hy off <名字> [更多…]` | 加入**离线**名单：**自动生成 UUIDv7**，生成前先扫服务端上已有 UUID 查重；若这个名字已经有身份则**拦下**（见下）；支持一次多个 |
+| `/hy off <名字> <uuid>` | 沿用你指定的 UUID（保住老存档的背包/成就），支持 32 位无后缀写法；只能配一个名字 |
+| `/hy off <名字> force` | 明确确认"给已有身份的名字换一个新 UUIDv7"（可批量） |
+| `/hy del <名字> [更多…]` | 从两个名单移除（存档数据仍挂在原 UUID 名下）；别名 `/hy - <名字>` |
+| `/hy list` | 查看两个名单（离线名单会显示 UUID 版本与生成时间）；别名 `/hy ls` |
+| `/hy whois <名字>` | **查户口**：这个名字在服务端上的历史 UUID 都在哪；别名 `/hy id <名字>` |
+| `/hy reload` | 重新读配置，并把 `chunk_lag.resident` 同步到采样开关 |
+
+**`/hy off` 的查重都扫了什么**（这就是"先扫已有 UUID 确认不重复"那一步）：
+
+```text
+① 配置文件 offline_players（本 Agent 之前发过的身份证）
+② usercache.json（原版记录的"名字 → UUID"，含 uuid/id 两种字段名）
+③ 存档 <level-name>/playerdata/*.dat、stats/*.json、advancements/*.json（真玩过的痕迹）
+④ 原版离线算法 UUID.nameUUIDFromBytes("OfflinePlayer:" + 名字)
+   —— 服务端以前用离线模式开过服的话，背包/成就全挂在它名下
+```
+
+新生成的 UUIDv7 还要与上面扫到的**全部已知 UUID**比一遍，确认不重复（撞车概率极低，撞了就重新生成）。
+
+**为什么"名字已有身份"时要拦下**（真实使用中最容易踩的坑）：
+
+```text
+[HyAuth] 已拦下：名字 Steve 在服务端上已经有身份了 —— 4510a1f8-...（来源: usercache.json（原版记录过这个名字））。
+        换一个新 UUID 等于「换人」：老存档的背包/成就/统计都归旧 UUID，不会跟过来。
+        想保住旧数据 → /hy off Steve 4510a1f8-...
+        确实要发新身份证 → /hy off Steve force
+```
+
+**UUIDv7 是什么、为什么用它**（RFC 9562）：48 位毫秒时间戳打头，因此**按 UUID 排序 ≈ 按创建时间排序**，
+"谁是什么时候被加进来的"一目了然；同毫秒内的 `rand_a` 用作单调计数器，所以本生成器产出的 UUID
+**严格递增**（连续敲命令加人也不会乱序）。剩余 74 位随机，撞车概率与 v4 同级。
+
+> 顺带一个实用结论：`/hy whois` 给出的"原版离线算法 UUID"如果**在存档里存在对应的 playerdata**，
+> 说明这个玩家以前在离线模式下玩过 —— 想保住他的背包，就用 `/hy off <名字> <那个 UUID>` 沿用。
+
+### 16.2 勘探命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `/hy lag` | **直接出报告**（最常用，不用记子命令） |
+| `/hy lag 30` | 采样 30 秒后自动出报告（= `/hy lag scan 30`） |
+| `/hy lag scan [秒]` | 同上，完整写法（不带秒数用配置默认值） |
+| `/hy lag list` | 立刻看当前累计（采样进行中也能看） |
+| `/hy lag top [N]` | 单区块耗时榜（默认 10，按单次峰值排序） |
+| `/hy lag tp <序号>` | 传送到报告里第 N 组范围的中心 |
+| `/hy lag tp <x> <z> [玩家]` | 传送到指定方块坐标（就是报告里显示的坐标；控制台可带玩家名） |
+| `/hy lag here` | 看**脚下这块**的耗时分项（到场勘查时确认"是不是这块"） |
+| `/hy lag on` / `off` | 常驻采样开 / 关 |
+| `/hy lag stop` | 提前结束按需扫描并立刻出报告 |
+| `/hy lag clear` | 清空两个窗口的累计数据 |
+| `/hy lag status` | 采样状态 + 各切点能力探测 |
+
+`/lag <子命令>` 是 `/hy lag <子命令>` 的快捷方式（少敲四个字符），所以最常用的就是：**`/lag` 看报告、
+`/lag 30` 采样、`/lag tp 2` 传送**。
+
+### 16.3 空置域挖掘命令（详见[第十八章](#十八空置域挖掘命令版世吞)）
+
+| 命令 | 作用 |
+| --- | --- |
+| `/hy clear <x1> <z1> <x2> <z2>` | **最常用**：对角两点直接建选区，并立刻自动预演 |
+| `/hy clear <x2> <z2>` | 以**你当前所站位置**为角点 1、参数为角点 2 |
+| `/hy clear <边长>` | 以**你为中心**的方形（如 `/hy clear 100` 挖 100x100） |
+| `/hy clear pos1` / `pos2` | 一个角一个角地选（不带坐标 = 取当前所站位置） |
+| `/hy clear dim <维度>` | 控制台/RCON 指定目标维度（`the_nether` / `the_end`，可写简写） |
+| `/hy clear preview` | 单独再预演一次（不动世界） |
+| `/hy clear go` | 开始挖（= `start confirm`；预演里也有可点击的「确认开始」） |
+| `/hy clear status` / `stop` / `reset` | 进度 / 立即中止（不回滚）/ 清空选区 |
+
+权限门槛单独更高：`clear.op_level` 默认 **3**（其它命令默认 2）。
+
+### 16.4 状态与诊断
+
+`/hy status` 会一次性给出：版本、命令根与权限门槛、两个名单人数、API 地址、
+聊天输出通道探测结果、采样状态，以及**每个切点能不能挂**：
+
+```text
+===== 区块卡顿勘探状态 =====
+常驻采样: 开（/hy lag on|off）· 按需扫描: 未开始（/hy lag scan 30）
+常驻窗口: 跟踪区块 2412 个 · 1 个维度 · MSPT 均值 18.42ms（近期 21.77ms，峰值 143.10ms）
+异常判据: 合计 ≥ 1.00ms 或 ≥ 中位数 6.00 倍 · 跟踪上限 20000 区块 · 方块实体口径: 独立计入合计
+切面能力探测（缺哪个版本差异项，对应类别就是 0，其它类别照常）：
+  · 区块 tick: 可挂载（tickChunk）
+  · 实体（非乘客）: 可挂载（tickNonPassenger）
+  · 实体（乘客）: 可挂载（tickPassenger）
+  · 方块实体: 可挂载（tickBlockEntities）
+  · 整服 MSPT: 可挂载（tickServer）
+  · 命令接管: 可挂载（performPrefixedCommand）
+  · 命令接管（旧名）: 未找到 performCommand/2（该类别将为 0）
+```
+
+---
+
+## 十七、许可证与致谢
+
+### 17.1 许可证：GPL-3.0-or-later（带传染性的 copyleft）
+
+本项目以 **GNU General Public License v3.0 或更高版本** 发布，完整文本见仓库根目录 [`LICENSE`](LICENSE)
+（也可在 <https://www.gnu.org/licenses/gpl-3.0.html> 查看）。
+
+这意味着：
+
+* ✅ 可以自由使用、修改、再分发（商用也可以）；
+* ⚠️ **传染性**：任何**分发**本项目或其衍生作品的行为，都必须同样以 GPL-3.0-or-later 开源，
+  并提供**完整的对应源码**（不能只发 jar，也不能闭源二次发行）；
+* ⚠️ 修改过的版本必须**显著标注"已修改"**并给出日期；
+* ⚠️ 必须保留版权与免责声明；
+* ❌ 不提供任何担保（见 GPL 第 15、16 条）。
+
+> 只想**自己开服使用**（不对外分发）的话，GPL 对你的要求很少 —— 随你怎么改，不用公开。
+
+### 17.2 致谢与来源说明
+
+这套三合一登录（`-javaagent` 劫持服务端鉴权入口，让正版 / 皮肤站外置 / 管理员指定 UUID 的离线号
+在同一台原版服务端上一起玩）是本项目**最早、也是最先开源出来的那部分** —— 我自己的服一直这么跑着。
+
+后来刷到 [Drizzle379/MsptMap](https://github.com/Drizzle379/MsptMap)（把每区块 MSPT 分七类采样、
+画到 Xaero 世界地图上的 Fabric Mod），第一反应是"**分项归因这个角度太对了**"：我自己服一卡，
+最缺的就是"到底是哪一块在吃 tick"。**卡顿勘探的想法就是从这儿来的** ——
+区别只是我不想让玩家装 Mod、也不想再加一套客户端协议，所以做成了纯服务端版：
+一条命令扫描 → 直接列出异常区块的**坐标范围** → 聊天里点一下 tp 到现场（见[第十五章](#十五区块卡顿勘探纯服务端无需客户端-mod)）。
+
+**只借思路，没有抄代码**：没有复制或改写 MsptMap 的任何源文件，落地方式也完全不同。
+其余部分 —— 三合一登录、Bundler 类加载器注入、切面字节码约束、聊天密钥三级桥接、
+逐接收者聊天分流、UUIDv7 名单管理、空置域挖掘 —— 都是本项目自己的实现。
+
+> "思路"本身不受版权保护，所以上面这次借鉴不影响本项目的许可证与独立性。
+> 这一段主要就是想跟作者说声谢谢；署名想怎么改（加链接、换措辞、或者完全不提）都可以，说一声就行。
+
+---
+
+## 十八、空置域挖掘（命令版"世吞"）
+
+**要解决的问题**：世吞（世界吞噬者）能挖出空置域，但它要铺几万格 TNT、上万个实体同时 tick ——
+小服务器上经常是"世吞挖到一半，服务端先崩了"。所以这里给管理员另一条路：
+**用原版 `/fill` 直接把区域挖空**，接受"没有掉落物、没有爆炸特效"的空置域，换来服务端不炸。
+
+> 这个功能的作业顺序采用命令版清区块的常见做法（对角两点 → 先清上方 → 挖防爆沟 → 清内部，
+> 全程 `/fill` + `forceload` + 限速）。本项目把它做成了 **Agent 内置的带节流任务**，
+> 而不是生成数据包：能预演、能中途停、进度回聊天、清理限定在区域内（见 [§18.5](#185-为什么不是生成数据包)）。
+
+### 18.1 挖完能得到什么效果（先看这个）
+
+| 阶段 | 挖完你在世界里能看到的变化 |
+| --- | --- |
+| 1 外圈上方清空 | 选区**再向外扩 1 格**的这一圈，`y=63` 以上**全没了**：树、山包、建筑、雪层消失，只剩 y=62 及以下的地层 |
+| 2 防爆沟 | 沿外圈四条边出现一圈 **1 格宽、从 y=-63 到 y=62 的沙墙**（把空置域外沿"包"起来） |
+| 3 内圈清空 | 内圈从 **y=-64 一直空到 y=62**：地表、洞穴、矿、水、熔岩、刷怪笼、基岩层全部消失，底部就是虚空 |
+
+最终形态就是一个**空置域（perimeter）**：外圈地上干净、内圈从底到地面全空 —— 和世吞挖出来的形态一样，
+用途也一样：**去掉地形、洞穴与光照干扰，刷怪塔/农场效率才稳定**（刷怪范围可控、掉落集中、不用挖洞找空间）。
+
+**和真·世吞的差别（动手前必须知道）**：
+
+| | 真·世吞（TNT 机器） | 本功能（命令版） |
+| --- | --- | --- |
+| 掉落物 | 矿石、方块掉一地 | **完全没有**：`/fill` 直接抹掉，不掉落也不进箱子 |
+| 爆炸与机器 | 有 TNT、有实体、有红石 | 没有；服务端只执行 `/fill` 命令 |
+| 耗时 | 建机器几小时 + 挖几小时 | 选完两条命令就走；挖的过程按节流跑 |
+| 服务端压力 | 上万 TNT/实体，小服务器常直接崩 | 只有 `/fill` + `forceload`，压力可用配置调小 |
+| 基岩层 | 挖不掉，会留一层基岩当底 | 默认**会被一起挖掉**（命令无视硬度）→ 底部是虚空；**要保留基岩**就设 `clear.break_bedrock: false` |
+
+**代价与不可逆性**：
+
+* 删掉的方块**不会掉出来**。想要矿石请自己先挖，或另存一份存档专门"刷矿"。
+* **没有撤销**。动手前请**备份存档**，或先在测试区跑一遍小区域。
+* **基岩开关**（`clear.break_bedrock`）：
+  * `true`（默认）：从 `clear.min_y`（默认 -64）开始清，
+    **基岩一起挖掉 ⇒ 底部是虚空**，东西掉下去就没了 —— 很多世吞设计要的就是这种"全空底"；
+  * `false`：**保留基岩层**，挖掘下界自动抬到 `clear.bedrock_top_y`（默认 -60）的上一格，也就是从 y=-59 开始清，
+    世界底板不动（下界的基岩在 0..4，把 `bedrock_top_y` 设成 `4` 即可）。
+
+### 18.2 命令怎么用（四种选区方式，选完立刻出预演）
+
+| 你想要的 | 命令 | 效果 |
+| --- | --- | --- |
+| **直接给对角两点（最快）** | `/hy clear -576 -66 -193 -448` | 立即以这两点为对角生成选区，**并自动预演** |
+| 人站在一角上 | `/hy clear -193 -448` | 以**你当前所站的方块**为角点 1，参数为角点 2 |
+| 挖"我周围一片" | `/hy clear 100` | 以**你为中心**、边长 100 的方形（100x100） |
+| 一个角一个角地选 | `/hy clear pos1` → 走到对角 → `/hy clear pos2` | 适合先实地看一眼再定第二个角 |
+| 控制台/RCON 挖别的维度 | `/hy clear dim the_nether` 然后给坐标 | 目标维度固定为下界（可写 `overworld`/`the_end`） |
+| 再看一遍计划 | `/hy clear preview` | 只算不动世界 |
+| **开挖** | `/hy clear go`（= `start confirm`） | 开始执行（**不可撤销**） |
+| 进度 / 中止 / 清空选区 | `/hy clear status` / `stop` / `reset` | 进度与阶段 / 立即停（不回滚）/ 重选 |
+
+**一条完整的例子**（就用 `-576,-66` 到 `-193,-448` 这组坐标）：
+
+```text
+/hy clear -576 -66 -193 -448    ← 四个数字：选区 x[-576..-193] z[-448..-66]，立刻出预演
+                                  预演里有一行「▶ 点击确认开始挖掘」，游戏内点一下等于下一条命令
+/hy clear go                    ← 确认开挖
+/hy clear status                ← 想看进度时
+/hy clear stop                  ← 想停时（已挖掉的不回滚）
+```
+
+命令都在 `/hy clear` 下，**需要权限等级 ≥ `clear.op_level`（默认 3）**；控制台与 RCON 是 4。
+`/hy clear` 不带参数会打印完整用法。
+
+### 18.3 挖的时候你会看到什么
+
+**预演**（不动世界，`preview` 或任何一种选区方式都会打印）：
+
+```text
+===== 空置域挖掘预演（还没有动世界）=====
+内圈: x[-576..-193] z[-448..-66]（384 x 383 方块）· 外圈各扩 1 格 · 维度 主世界
+阶段 1 外圈上方清空: y 63 .. 319
+阶段 2 防爆沟: 四边填 sand（y -63 .. 62）
+阶段 3 内圈清空: y -64 .. 62
+计划: … 步（fill … 条）· … 批次 · 预计清理约 … 方块
+节流: 每 4 tick 做 2 步 → 预计约 … 秒（已计入 forceload 等待，实际取决于机器与磁盘）
+实体清理: items（仅限本区域范围）
+  ▶ 点击确认开始挖掘（不可撤销）   [命令: /hy clear start confirm]
+```
+
+> 上面打 `…` 的数字**不替你编**：选区一确定，`preview` 立刻把步数、体积、预计耗时算给你。
+> 量级参考：自检替身里 32x32 的小区域实际是 `39 步 / 25 条 fill / 427,140 方块 / 预计 78 秒`。
+
+**开挖后**：聊天每 10%（`clear.announce_percent`）报一次进度，控制台每步都有审计日志：
+
+```text
+[HyAuth] 空置域挖掘开始: 内圈 x[-576..-193] z[-448..-66]（外圈各扩 1 格）· 维度 主世界，计划 N 步 / 约 M 方块（发起者: Server）
+[HyAuth] 空置域挖掘 · 阶段1/3 外圈上方清空 · 进度 10%（…/… 步，约 … 方块）
+[HyAuth] 空置域挖掘 · 阶段2/3 防爆沟 · 进度 40%（…/… 步，约 … 方块）
+[HyAuth] 空置域挖掘完成: …，用时 N 秒，清理约 M 方块（发起者: Server）
+```
+
+`/hy clear status` 随时问，会给出：`执行中: 120/2679 步 · 阶段2/3 防爆沟 · 已清理约 3,120,000 方块（4%）· 已跑 46 秒`。
+
+### 18.4 三阶段配方（想看懂它在干什么）
+
+| 阶段 | y 范围 | 区域 | 动作 | 为什么这样排 |
+| --- | --- | --- | --- | --- |
+| 1 | `top_y` .. `top_y+above_height`（默认 63..319） | **外圈**（内圈各扩 1 格） | `fill … air` | 先清高处，避免上面的方块掉进后面要挖的沟里 |
+| 2 | `min_y+1` .. `top_y-1`（默认 -63..62） | **外圈四条边**（1 格宽） | `fill … <trench_block>`（默认沙子） | 防爆沟：世吞作业时兜住爆炸与落沙的边界 |
+| 3 | `min_y` .. `top_y-1`（默认 -64..62） | **内圈** | `fill … air` | 最后清内部主体 |
+
+每个**批次**（默认 4x4 区块 = 64x64 方块）都是同一个节奏：
+
+```text
+forceload add <批次范围>        ← 保证要挖的区块已加载（等 load_wait_ticks 再动手）
+fill …（按 ≤32768 方块自动分层，一条命令一块 16x16 的柱状切片）
+kill @e[<本区域体积选择器>]      ← clear.kill 控制，只清本区域
+forceload remove <批次范围>      ← 挖完就卸载，不长期霸占区块加载
+```
+
+### 18.5 为什么不是"生成数据包"
+
+| 方面 | 数据包 + `/schedule`/`/function` | 本项目（内存任务 + tick 驱动） |
+| --- | --- | --- |
+| 落地 | 要写文件、`/reload` 才生效 | 一条命令，无需落盘与 reload |
+| 预演 | 只能自己心算 | `preview` 给出体积/批次/预计耗时，**并且一条命令都不派发** |
+| 中止 | 只能改函数重来，或在途等它跑完 | `stop` 立刻停 |
+| 进度 | 靠 `/say` | 回聊天 + 控制台，`status` 随时问 |
+| 实体清理 | 常见写法是全局 `kill @e[type=item]`（把全服掉落物一起扬了） | **按本区域体积选择器**清，区域外的东西一根汗毛都不动 |
+| 节流 | 靠 `schedule` 固定间隔 | `interval_ticks` / `fills_per_step` 可调，且每步都受"每 tick 时间闸"约束 |
+| 重启 | 任务与数据包状态可能不一致 | **重启即忘**（破坏性任务不持久化，反而更安全） |
+
+### 18.6 安全设计（这是不可撤销的破坏性操作）
+
+* **更高权限门槛**：`clear.op_level` 默认 **3**（其它命令默认 2）；控制台/RCON 是 4。
+* **必须确认**：`/hy clear start` 不带 `confirm` 只会打印提醒，**不会开始**；`go` 是它的快捷别名。
+* **预演不动世界**：`preview` 只生成计划（自检里断言这一步"一条原版命令都没派发"）。
+* **双层上限**：`max_side`（边长，默认 2048 方块）、`max_volume`（体积，默认 5 亿方块），超限直接拒绝。
+* **命令合法**：每条 `fill` 自动切成 ≤ 32768 方块（原版上限），分层**连续、不重叠、不留空隙**
+  （自检里有专门的覆盖断言，还会断言"切分没有过度保守"）。
+* **批次化 + forceload 加卸载**：不会一次性把几百个区块长期顶在加载状态。
+* **审计**：开始/进度/完成/中止都打控制台日志，含发起者、选区、步数、体积。
+* **重启即忘**：任务只在内存里，服务端重启后不会"自己接着挖"。
+
+### 18.7 想调整效果时改哪里
+
+| 你想要的效果 | 改哪个配置（`littleskin_config.json` → `clear`） |
+| --- | --- |
+| **要保留基岩层**（底板不动） | `clear.break_bedrock: false`（自动从 `bedrock_top_y` 的上一格开始清） |
+| **就要破开基岩**（真·全空底，默认） | `clear.break_bedrock: true`，并让 `clear.min_y: -64` |
+| 基岩不在 -60（例如下界是 0..4） | `clear.bedrock_top_y: 4` |
+| 只想挖到某个层（不想动更下面） | `clear.min_y: -60`（或你要的层） |
+| 不要那圈沙墙 | `clear.trench: false` |
+| 沟想换材料 | `clear.trench_block: "cobblestone"` |
+| 更温柔（更慢更稳，老机器适用） | `clear.interval_ticks: 8`、`clear.fills_per_step: 1` |
+| 更快（机器强） | `clear.interval_ticks: 2`、`clear.fills_per_step: 4` |
+| 顺便把区域里的怪也清了 | `clear.kill: all` |
+| 一个实体都不动 | `clear.kill: none` |
+| 每批挖更大块（减少 forceload 往返） | `clear.batch_chunks: 8` |
+| 地面不在 y=63（比如高原/自定义地形） | `clear.top_y: 80`、`clear.above_height: 240` |
+| 允许挖更大范围 | `clear.max_side` / `clear.max_volume` 调大 |
+| 只想给更高级别的管理员用 | `clear.op_level: 4` |
+
+改完**保存即热重载**，下一次 `preview` 就用新参数（`/hy reload` 也能手动触发）。
 
 ---
 
@@ -1217,12 +1780,23 @@ pwsh -File verify\loaderiso.ps1
 ==================================================
 [HyAuth] 配置重载完成（JSON 配置加载成功），当前 LittleSkin 白名单人数: 2，离线名单人数: 1，API: https://littleskin.cn/api/yggdrasil
 [HyAuth] 配置热监听已启动: /srv/mc
+[HyAuth] 管理员命令: /hy …（另有 /hy / /ha / /hyauth / /lag），需要权限等级 ≥ 2；区块卡顿勘探常驻采样: 开
+[HyAuth] 区块卡顿采样: 常驻窗口 已开启（/hy lag on|off 可随时切换），按需扫描用 /hy lag scan <秒>
 [HyAuth] 已成功挂载 Mojang Authlib 验证切面。
 [HyAuth] 命中目标类: com.mojang.authlib.services.MinecraftServicesSessionService，开始挂载 hasJoinedServer 切面。
-[HyAuth] 已把 12 个 Agent 辅助类注入服务端类加载器: java.net.URLClassLoader@58be6e8
+[HyAuth] 命中区块 tick 宿主: net.minecraft.server.level.ServerLevel，挂载「区块 tick 计时 / 实体计时」勘探切面。
+[HyAuth] 命中区块类: net.minecraft.world.level.chunk.LevelChunk，挂载「方块实体计时」勘探切面。
+[HyAuth] 命中服务端主类: net.minecraft.server.MinecraftServer，挂载「整服 MSPT 计时」勘探切面。
+[HyAuth] 命中命令系统: net.minecraft.commands.Commands，挂载「管理员命令接管」切面（命令根见配置 commands.roots）。
+[HyAuth] 已把 58 个 Agent 辅助类注入服务端类加载器: java.net.URLClassLoader@58be6e8
 [HyAuth] 已改写目标类字节码: com.mojang.authlib.services.MinecraftServicesSessionService（加载器: java.net.URLClassLoader@58be6e8）
 [Server thread/INFO]: Done (0.714s)! For help, type "help"
 ```
+
+> **注入数量要留心**：`已把 N 个 Agent 辅助类注入服务端类加载器` 里的 N 应该随版本稳定增长
+> （v1.0.4 是 58）。如果某项功能（鉴权 / 勘探 / 命令）整块不工作时，先看这里有没有
+> `注入辅助类失败: <类名> -> <原因>` —— 这类失败过去会让**整块功能静默失效**，
+> 现在会逐条打印原因，且其余类照常注入（见 [§8.3](#83-原版-bundler-与-loaderbridge)）。
 
 > **判断 Agent 到底有没有生效，就看这一行**：`命中目标类` 之后必须跟着
 > `已改写目标类字节码`。只有前者没有后者（或出现 `字节码改写失败` / `[Byte Buddy] ERROR`），
@@ -1257,6 +1831,14 @@ pwsh -File verify\loaderiso.ps1
 | `命中玩家指令/聊天监听器: …ServerGamePacketListenerImpl… 挂载「无公钥指令回退」与「外置账号逐接收者未签名广播」切面。` | 有玩家连接时出现（该类懒加载）；方法若声明在父类，这里会显示 `ServerCommonPacketListenerImpl` |
 | `外置账号的聊天改为「逐接收者未签名（伪装聊天）」广播：作者本人仍收到原版签名消息…` | 外置玩家第一次被广播聊天时打印一次（见 [§8.7](#87-交替发言必被踢--外置玩家自己看不到自己发的消息)） |
 | `字节码改写失败: …` | 切面没挂上，Agent 静默失效（服务端仍能开服），完整原因见紧随其后的 `[Byte Buddy] ERROR` |
+| `注入辅助类失败: <类名> -> <原因>` | 某个辅助类没能注入服务端加载器（相关功能不可用，其余功能不受影响）；最常见原因是**旧版 Boot 顺序问题**已由多轮重试解决，若仍出现请把该行发出来 |
+| `命中区块 tick 宿主 / 命中区块类 / 命中服务端主类 / 命中命令系统` | 勘探与命令切面命中对应服务端类（首次加载这些类时打印，通常在开服阶段） |
+| `区块卡顿采样: 常驻窗口 已开启/已关闭` | 常驻采样开关的启动状态（配置 `chunk_lag.resident`；命令里可随时 `lag on\|off`） |
+| `管理员命令: /hy …（另有 …），需要权限等级 ≥ N` | 命令根与权限门槛（配置 `commands.roots` / `commands.op_level`） |
+| `空置域挖掘开始: 内圈 x[…..…] z[…..…]（外圈各扩 1 格）· 维度 …，计划 N 步 / 约 M 方块（发起者: …）` | `/hy clear start confirm` 开始时的审计日志 |
+| `空置域挖掘 · 阶段2/3 防爆沟 · 进度 40%（…/… 步，约 N 方块）` | 进度播报（按 `clear.announce_percent` 间隔） |
+| `空置域挖掘完成: …，用时 N 秒，清理约 M 方块（发起者: …）` | 任务完成 |
+| `空置域挖掘被中止: …，进度 N%，已清理约 M 方块` | `/hy clear stop` 或命令派发失败时的中止日志 |
 | `[Byte Buddy] ERROR …` | 切面挂载失败，需要排查版本兼容；最常见原因是切面类字节码引用了 authlib，见 [§8.4](#84-切面类字节码的硬性约束必读) |
 
 ---
@@ -1265,12 +1847,13 @@ pwsh -File verify\loaderiso.ps1
 
 ```text
 HyAuth-Agent/
-├── pom.xml                                   # Maven 构建（shade + 清单）
+├── LICENSE                                   # GPL-3.0 全文（本项目以 GPL-3.0-or-later 发布，见第十七章）
+├── pom.xml                                   # Maven 构建（shade + 清单 + 许可证元数据）
 ├── .gitignore                                # 只提交源码/文档/自检脚本（忽略 target、.m2repo、tools、verify/libs…）
 ├── .gitattributes                            # 统一 LF，避免 Linux 上 "$'\r': command not found"
 ├── .github/workflows/
-│   ├── ci.yml                                # 推送/PR：构建 + 三套自检 + 上传 jar 产物
-│   └── release.yml                           # 推送 v* 标签：构建 + 自检 + 自动发 Release（附 jar 与 SHA256）
+│   ├── ci.yml                                # 推送/PR：构建 + 四套自检 + 上传 jar 产物
+│   └── release.yml                           # 推送到 main 自动递增修订号 / v* 标签：构建 + 自检 + 发 Release
 ├── build.bat                                 # 一键构建（Windows）
 ├── build.sh                                  # 一键构建（Linux / macOS）
 ├── start.bat                                 # 服务端启动脚本（Windows，含 --add-opens 说明）
@@ -1288,10 +1871,17 @@ HyAuth-Agent/
 │   ├── ChatCommandAdvice.java                 # 无公钥离线玩家的指令回退切面（§8.6）
 │   ├── ExternalChatAdvice.java                # 外置账号逐接收者未签名（伪装聊天）广播切面（§8.7）
 │   ├── OfflineDecoderAdvice.java              # 离线玩家按玩家豁免 enforce-secure-profile（§8.6）
+│   ├── ChunkTickAdvice.java                   # 区块 tick 计时切面（勘探主干，§15.1）
+│   ├── EntityTickAdvice.java                  # 非乘客实体计时切面（按实体所在区块归因）
+│   ├── PassengerTickAdvice.java               # 乘客实体计时切面（tickPassenger）
+│   ├── BlockEntityTickAdvice.java             # 方块实体计时切面（按区块归因 + 嵌套探测）
+│   ├── ServerTickAdvice.java                  # 整服 MSPT 基线切面（兼管扫描到点/嵌套深度清零）
+│   ├── CommandAdvice.java                     # 管理员命令接管切面（Commands#performPrefixedCommand）
+│   ├── LevelTickAdvice.java                   # 世界 tick 心跳切面（给空置域挖掘任务驱动，与 tickServer 互相兜底）
 │   ├── LoginFlowContext.java                 # 登录期 ThreadLocal 上下文 + 名字解析
-│   ├── LoaderBridge.java                     # Bundler 类加载器注入
+│   ├── LoaderBridge.java                     # Bundler 类加载器注入（逐类 + 多轮重试，§8.3）
 │   ├── config/
-│   │   ├── ListManager.java                  # 配置解析 / 名单 / 热监听
+│   │   ├── ListManager.java                  # 配置解析 / 名单 / 热监听 / 勘探与命令配置项
 │   │   └── OfflinePlayer.java                # 离线名单条目（名字 + UUID）
 │   └── util/
 │       ├── YggdrasilAuthUtil.java            # LittleSkin 请求 + RSA 验签 + 公钥获取
@@ -1303,14 +1893,28 @@ HyAuth-Agent/
 │       ├── ChatKeyBridge.java                # ★ 三级桥接验签：Mojang → 皮肤站公钥 → 策略
 │       ├── KeylessChatBypass.java            # ★ 无聊天公钥的离线玩家：指令按未签名执行
 │       ├── ExternalChatBroadcast.java        # ★ 外置账号聊天按接收者分流（作者签名 / 他人伪装聊天）（§8.7）
-│       └── OfflineChatExempt.java            # ★ 离线玩家按玩家豁免 enforce-secure-profile
+│       ├── OfflineChatExempt.java            # ★ 离线玩家按玩家豁免 enforce-secure-profile
+│       ├── VanillaReflect.java               # ★ 服务端类反射桥（类/方法/字段缓存，热路径不抛异常）
+│       ├── ChatOut.java                      # ★ 命令输出：控制台文本 + 聊天可点击组件（点击/悬停/颜色）
+│       ├── ChunkLagSampler.java              # ★ 勘探核心：按区块记账、运行期口径探测、聚类分析
+│       ├── LongKeyMap.java                   # ★ 无装箱 long→对象哈希表（勘探热路径专用）
+│       ├── LagReport.java                    # ★ 报告渲染 + 传送落点计算（交给原版 /tp 执行）
+│       ├── AdminCommands.java                # ★ 管理员命令解析与分发（名单 + 勘探 + 空置域挖掘）
+│       ├── ClearJob.java                     # ★ 空置域挖掘：三阶段计划 + tick 驱动节流执行 + 预演/状态/中止
+│       ├── ConfigWriter.java                 # ★ 命令改配置：读→改→原子替换→热重载
+│       ├── ExistingUuidScan.java             # ★ 发身份证前查户口（usercache / 存档 / 原版离线算法）
+│       └── UuidV7.java                       # ★ RFC 9562 UUIDv7（同毫秒单调递增）
 └── verify/                                   # 自检脚手架（不参与 Agent 构建）
     ├── verify.ps1                            # 主自检：模拟/真实 Authlib × 新旧签名 + 热重载
     ├── loaderiso.ps1                         # ★ 类加载器隔离回归测试（还原 Bundler 拓扑，改切面必跑）
     ├── chat.ps1                              # ★ 外置账号聊天广播回归测试（改聊天切面必跑，§11.1）
+    ├── lag.ps1                               # ★ 勘探 + 管理员命令回归测试（改勘探/命令必跑，§11.3）
     ├── chat/ChatAdviceMain.java              #   断言：别人→伪装聊天、自己→原版签名消息、开关行为
     ├── chat/net/minecraft/…                  #   26.3 形状的替身（PlayerChatMessage / ChatType.Bound /
     │                                         #   ServerGamePacketListenerImpl / ServerCommonPacketListenerImpl…）
+    ├── lag/LagAdviceMain.java                #   78 项断言：聚类范围、点击传送、归因、权限、UUIDv7 查重、空置域挖掘
+    ├── lag/net/minecraft/…                   #   26.x 形状替身（ServerLevel / LevelChunk / Entity /
+    │                                         #   MinecraftServer / Commands / Component / ClickEvent…）
     ├── loaderiso/{LoaderIsoMain,IsoTarget,MissingTypeUser,Caller}.java
     ├── loaderiso/net/minecraft/util/SignatureValidator.java   # 校验器替身（验证 relax_chat_keys）
     ├── tools/Fetch.java
@@ -1318,8 +1922,12 @@ HyAuth-Agent/
     ├── mockmodern/…  mocklegacy/…            # 模拟新旧签名的目标类
 ```
 
-> **版本号说明**：源码里的 `1.0.0` 是 Maven 版本（`pom.xml` 未改动）；本文档中的
-> "v1.0.1" 指的是**修复了 Bundler 类加载器隔离 bug 之后重新构建的这一版 jar**，
-> "v1.0.2" 指的是**修复"外置玩家自己看不到自己发的消息"（逐接收者聊天分流）之后的那一版**，
-> 文件名仍然是 `HyAuth-Agent-1.0.0.jar`。请以 **SHA256** 区分新旧产物：
-> 旧版 `c064bcdb…`（有问题，切面挂不上），最新版见项目根目录 `BUILD.txt`。
+> **版本号说明**：源码里的 `1.0.0` 是 Maven 版本（`pom.xml` 未改动），文件名也一直叫
+> `HyAuth-Agent-1.0.0.jar`；发行版本号由 GitHub 标签体现。
+> - **v1.0.3**（已发布，`38c0f54`）：三合一登录 / 鉴权分流那部分 ——
+>   正版 + 外置（LittleSkin）+ 管理员指定 UUID 的离线名单同服。
+> - **v1.0.4**（本版）：在其之上新增区块卡顿勘探（第十五章）、管理员命令与 UUIDv7 名单管理（第十六章）、
+>   空置域挖掘（第十八章），并把许可改为 GPL-3.0-or-later。
+> 文档里的 "v1.0.1" / "v1.0.2" 是更早的开发期内部版本（分别修掉了 Bundler 类加载器隔离导致的切面失效、
+> 以及"外置玩家自己看不到自己发的消息"）。请以 **SHA256** 区分产物：旧版 `c064bcdb…`（有问题，
+> 切面挂不上），最新版见项目根目录 `BUILD.txt` 与 Releases 页面。
