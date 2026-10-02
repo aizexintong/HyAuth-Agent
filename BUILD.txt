@@ -2,9 +2,9 @@ HyAuth-Agent 构建产物信息
 =========================================================
 
 产物      : target/HyAuth-Agent-1.0.0.jar
-大小      : 9,115,968 字节 (8.69 MB)
-SHA256    : a13154fbd932e88f4f09104f0564dd1fa4bea3da2ac5c7167264d1d41505aef4
-构建时间  : 2026-10-02 13:10 (+08:00)
+大小      : 9,118,377 字节 (8.70 MB)
+SHA256    : 1eff4278e5d9d5cbcf2ee9d8ecf62e9fecf21d89554283eb8382f4e24d316d29
+构建时间  : 2026-10-02 13:52 (+08:00)
 工具链    : JDK 25.0.1 (Microsoft) + Apache Maven 3.9.9, --release 8, shade 打包
 校验命令  : sha256sum HyAuth-Agent-1.0.0.jar
 许可证    : GPL-3.0-or-later（根目录 LICENSE；copyleft，分发衍生作品须同样开源并提供源码）
@@ -30,17 +30,40 @@ SHA256    : a13154fbd932e88f4f09104f0564dd1fa4bea3da2ac5c7167264d1d41505aef4
 
 省事写法（按"命令都要方便直观"定的形式）：
   名单: /hy add ex  <名字> [名字…]    加入外置（批量＝空格隔开）
-        /hy add off <名字> [名字…]    加入离线：自动 UUIDv7 + 先查重
-        /hy add off <名字> <uuid>     加入离线：沿用这条原始记录的 名字+UUID
-        /hy off <名字> force          改已有离线玩家：换新 UUIDv7
-        /hy off <名字> <uuid>         改已有离线玩家：UUID 改成指定的这个
+        /hy add off <名字> [名字…]    加入离线：先查户口，有历史身份就**沿用**，没有才发 UUIDv7（并查重）
+        /hy off <名字> [名字…] force  给已有玩家换一个全新 UUIDv7（老存档的背包/成就不跟过去）
         /hy del <名字> [名字…]        按名字删（名字唯一，不分外置/离线）
         /hy ls · /hy id <名字>        list / whois 的短别名
   勘探: /lag（无参）＝直接出报告；/lag 30 ＝采样 30 秒；/lag tp 2 ＝传送
   挖掘: /hy clear <x1> <z1> <x2> <z2>（对角两点，选完自动预演）、/hy clear <x2> <z2>（以站位为角点1）、
         /hy clear <边长>（以你为中心的方形）、/hy clear go（= start confirm）、/hy clear dim the_nether
-  说明: 名字用空格分隔即为批量；唯一例外是"指定 UUID"只能配一个名字（UUID 是某个人的身份证）。
+  说明: 名字用空格分隔即为批量。
+        没有"手填 UUID"的命令：沿用是自动的（查户口查得到），真要换人用 force —— 这两条已覆盖全部情况。
         README 文首有一张"命令汇总表"，全部命令一页看完。
+
+配置版本校对与自动补齐（升级友好）：
+  · 配置文件带 config_version（当前 v4：v1 鉴权 / v2 聊天开关 / v3 勘探+命令 / v4 空置域挖掘）
+  · 启动与热重载都会校对：
+      文件版本 < 支持版本 → 自动补齐缺失项（按默认值写回）并盖上 v4
+      文件版本 = 支持版本 → 不写文件（除非发现某项被手工删掉）
+      文件版本 > 支持版本 → 只读不写，避免把新字段抹掉
+  · **账号信息与已有值一律原样保留**（只新增，不修改、不删除未知字段）
+  · 日志： [HyAuth] 配置版本 v0 → v4，已自动补齐 37 个新版新增项（填的是默认值，可直接在文件里改）: […]
+          [HyAuth] 原有的账号信息（littleskin_players / offline_players）与已有配置值均原样保留。
+  · /hy status 会显示"配置文件版本 vN（本插件支持 vM）"
+  · 写回用"临时文件 + 原子替换"，并且**等读取器关闭之后**才写（Windows 上替换正被打开的文件会失败）
+
+自检与 CI：
+  · 四套自检：verify/loaderiso.ps1(6) · verify/chat.ps1(11) · verify/lag.ps1(83) · verify/verify.ps1(各 20)
+  · CI 与 Release 都用 **Java 25**（与服务端运行时一致），windows-latest
+  · 修掉一个让 CI 必挂的坑：.gitignore 里的 `world/` 没锚定到仓库根，
+    把自检替身 verify/lag/net/minecraft/world/** 下的 4 个文件（Entity/ChunkPos/LevelChunk/Heightmap）
+    静默忽略了 —— 本地有文件所以自检照过，CI 检出后缺文件、javac 秒级失败。
+    现在服务端运行时目录规则全部锚定（/world/、/logs/、/libraries/ …），并加了兜底规则。
+
+文档：README.md 已整篇重写（2008 行 → 479 行）：文首是**命令汇总表**（全部命令一页看完）与
+      **GPL-3.0-or-later 许可证徽章 + 明确声明**，然后是功能/环境/编译/部署/配置/三类玩家/三个功能/
+      原理与硬约束/许可证与致谢/自检/排错/限制/附录。
 
 基岩开关：
   clear.break_bedrock  true   默认：连基岩一起挖掉（底部是虚空，很多世吞要的"全空底"）

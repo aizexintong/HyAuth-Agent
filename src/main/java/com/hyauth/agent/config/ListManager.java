@@ -21,10 +21,12 @@ import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -44,6 +46,25 @@ public final class ListManager {
 
     /** 配置文件名（相对于服务端工作目录）。 */
     public static final String FILE_NAME = "littleskin_config.json";
+
+    /**
+     * 当前插件支持的<b>配置架构版本</b>（配置项增删改时 +1，与插件版本号无关）。
+     *
+     * <pre>
+     *   v1  最初的三合一鉴权（littleskin_players / offline_players / api_root …）
+     *   v2  聊天链路开关（relax_chat_keys / bypass_signed_commands / offline_chat_exempt …）
+     *   v3  区块卡顿勘探 + 管理员命令（chunk_lag.* / commands.*）
+     *   v4  空置域挖掘（clear.*，含基岩开关）
+     * </pre>
+     *
+     * <p>启动/热重载时会把文件里的 {@code config_version} 与本值校对：
+     * 低版本 → 自动补齐缺失的配置项（只新增，<b>已有账号信息与已有值一律原样保留</b>）并盖上当前版本；
+     * 高版本（配置文件来自更新的插件）→ 只读取、不写回，避免把新字段抹掉。
+     */
+    public static final int CONFIG_VERSION = 4;
+
+    /** 配置文件里声明的版本（没有这个字段的老配置按 0 处理）。 */
+    private static volatile int configVersion = 0;
 
     /** 默认 LittleSkin Yggdrasil API 根地址。 */
     public static final String DEFAULT_API_ROOT = "https://littleskin.cn/api/yggdrasil";
@@ -355,9 +376,172 @@ public final class ListManager {
         }
     }
 
+    /**
+     * 把老配置文件里缺失的配置项按默认值补齐（升级新版本后第一次启动时用）。
+     *
+     * <p>为什么需要它：v1.0.4 起配置项明显变多（{@code chunk_lag} / {@code commands} / {@code clear} 三块）。
+     * 老配置文件没有这些键时程序本来就用默认值跑，但管理员打开文件根本看不到"原来还有这些能调"。
+     * 所以加载成功后把缺的写上，<b>只新增</b>：已有值一律不动，未知字段也保留。
+     *
+     * @return 补上的条目名（形如 {@code clear.interval_ticks}）；空列表＝文件本来就是全的
+     */
+    private static List<String> completeMissingEntries(JsonObject json) {
+        List<String> added = new ArrayList<String>();
+        ensureArray(json, "littleskin_players", added);
+        ensureArray(json, "offline_players", added);
+        ensureString(json, "api_root", DEFAULT_API_ROOT, added);
+        ensureString(json, "public_key", "", added);
+        ensureInt(json, "connect_timeout_ms", DEFAULT_TIMEOUT_MS, added);
+        ensureInt(json, "read_timeout_ms", DEFAULT_TIMEOUT_MS, added);
+        ensureBool(json, "relax_chat_keys", true, added);
+        ensureBool(json, "chat_key_strict", false, added);
+        ensureBool(json, "bypass_signed_commands", true, added);
+        ensureBool(json, "offline_chat_exempt", true, added);
+        ensureBool(json, "debug", false, added);
+
+        JsonObject chunkLag = ensureObject(json, "chunk_lag", added);
+        if (chunkLag != null) {
+            ensureBool(chunkLag, "resident", true, added, "chunk_lag.");
+            ensureNumber(chunkLag, "ewma_alpha", 0.05D, added, "chunk_lag.");
+            ensureNumber(chunkLag, "flag_threshold_ms", 1.0D, added, "chunk_lag.");
+            ensureNumber(chunkLag, "flag_relative_factor", 6.0D, added, "chunk_lag.");
+            ensureInt(chunkLag, "scan_default_seconds", 30, added, "chunk_lag.");
+            ensureInt(chunkLag, "report_top", 10, added, "chunk_lag.");
+            ensureInt(chunkLag, "max_clusters", 8, added, "chunk_lag.");
+            ensureInt(chunkLag, "max_tracked_chunks", 20000, added, "chunk_lag.");
+        }
+
+        JsonObject commands = ensureObject(json, "commands", added);
+        if (commands != null) {
+            JsonArray roots = ensureArray(commands, "roots", added, "commands.");
+            if (roots != null && roots.size() == 0) {
+                for (String root : defaultCommandRoots()) {
+                    roots.add(root);
+                }
+                added.add("commands.roots(默认值)");
+            }
+            ensureInt(commands, "op_level", 2, added, "commands.");
+        }
+
+        JsonObject clear = ensureObject(json, "clear", added);
+        if (clear != null) {
+            ensureInt(clear, "op_level", 3, added, "clear.");
+            ensureInt(clear, "interval_ticks", 4, added, "clear.");
+            ensureInt(clear, "fills_per_step", 2, added, "clear.");
+            ensureInt(clear, "load_wait_ticks", 5, added, "clear.");
+            ensureString(clear, "kill", "items", added, "clear.");
+            ensureInt(clear, "min_y", -64, added, "clear.");
+            ensureInt(clear, "top_y", 63, added, "clear.");
+            ensureInt(clear, "above_height", 256, added, "clear.");
+            ensureBool(clear, "trench", true, added, "clear.");
+            ensureString(clear, "trench_block", "sand", added, "clear.");
+            ensureInt(clear, "batch_chunks", 4, added, "clear.");
+            ensureInt(clear, "max_side", 2048, added, "clear.");
+            ensureLong(clear, "max_volume", 500_000_000L, added, "clear.");
+            ensureInt(clear, "announce_percent", 10, added, "clear.");
+            ensureBool(clear, "break_bedrock", true, added, "clear.");
+            ensureInt(clear, "bedrock_top_y", -60, added, "clear.");
+        }
+        return added;
+    }
+
+    private static JsonObject ensureObject(JsonObject parent, String key, List<String> added) {
+        if (parent.has(key) && !parent.get(key).isJsonNull() && parent.get(key).isJsonObject()) {
+            return parent.getAsJsonObject(key);
+        }
+        JsonObject created = new JsonObject();
+        parent.add(key, created);
+        added.add(key);
+        return created;
+    }
+
+    private static JsonArray ensureArray(JsonObject parent, String key, List<String> added, String prefix) {
+        if (parent.has(key) && !parent.get(key).isJsonNull() && parent.get(key).isJsonArray()) {
+            return parent.getAsJsonArray(key);
+        }
+        JsonArray created = new JsonArray();
+        parent.add(key, created);
+        added.add(prefix + key);
+        return created;
+    }
+
+    private static JsonArray ensureArray(JsonObject parent, String key, List<String> added) {
+        return ensureArray(parent, key, added, "");
+    }
+
+    private static void ensureString(JsonObject parent, String key, String value, List<String> added, String prefix) {
+        if (parent.has(key) && !parent.get(key).isJsonNull()) {
+            return;
+        }
+        parent.addProperty(key, value);
+        added.add(prefix + key);
+    }
+
+    private static void ensureString(JsonObject parent, String key, String value, List<String> added) {
+        ensureString(parent, key, value, added, "");
+    }
+
+    private static void ensureBool(JsonObject parent, String key, boolean value, List<String> added, String prefix) {
+        if (parent.has(key) && !parent.get(key).isJsonNull()) {
+            return;
+        }
+        parent.addProperty(key, value);
+        added.add(prefix + key);
+    }
+
+    private static void ensureBool(JsonObject parent, String key, boolean value, List<String> added) {
+        ensureBool(parent, key, value, added, "");
+    }
+
+    private static void ensureInt(JsonObject parent, String key, int value, List<String> added, String prefix) {
+        if (parent.has(key) && !parent.get(key).isJsonNull()) {
+            return;
+        }
+        parent.addProperty(key, value);
+        added.add(prefix + key);
+    }
+
+    private static void ensureInt(JsonObject parent, String key, int value, List<String> added) {
+        ensureInt(parent, key, value, added, "");
+    }
+
+    private static void ensureLong(JsonObject parent, String key, long value, List<String> added, String prefix) {
+        if (parent.has(key) && !parent.get(key).isJsonNull()) {
+            return;
+        }
+        parent.addProperty(key, value);
+        added.add(prefix + key);
+    }
+
+    private static void ensureNumber(JsonObject parent, String key, double value, List<String> added, String prefix) {
+        if (parent.has(key) && !parent.get(key).isJsonNull()) {
+            return;
+        }
+        parent.addProperty(key, value);
+        added.add(prefix + key);
+    }
+
+    /** 原子写回配置文件（先写 .tmp 再 move），避免服务端被 kill 时留下半截文件。 */
+    private static void writeConfigFile(JsonObject json) throws Exception {
+        File target = new File(FILE_NAME);
+        File temp = new File(FILE_NAME + ".tmp");
+        try (Writer writer = new OutputStreamWriter(new FileOutputStream(temp), StandardCharsets.UTF_8)) {
+            GSON.toJson(json, writer);
+        }
+        try {
+            java.nio.file.Files.move(temp.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception atomicFailed) {
+            java.nio.file.Files.move(temp.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
     private static void createDefaultConfig(File file) {
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8)) {
             JsonObject config = new JsonObject();
+            config.addProperty("config_version", CONFIG_VERSION);
             config.addProperty("description",
                     "HyAuth-Agent 配置文件：littleskin_players = 走 LittleSkin 外置验证的玩家；"
                             + "offline_players = 管理员手动指定 UUID 的离线玩家（优先级最高）");
@@ -583,6 +767,28 @@ public final class ListManager {
                     || clear.get("break_bedrock").isJsonNull() || clear.get("break_bedrock").getAsBoolean();
             clearBedrockTopY = clampInt(optInt(clear, "bedrock_top_y", -60), -2048, 2048);
 
+            // 升级友好：校对配置版本，版本偏低就补齐新版配置项并盖上新版本号。
+            // 写回要等读取器关闭之后（Windows 上替换一个还打开着的文件会失败），所以这里只记录结果。
+            configVersion = optInt(json, "config_version", 0);
+            List<String> completed = new ArrayList<String>();
+            if (configVersion > CONFIG_VERSION) {
+                System.err.println("[HyAuth] 配置文件版本 v" + configVersion + " 比本插件支持的 v"
+                        + CONFIG_VERSION + " 更新：本次只读取、不写回（避免把新字段抹掉）。");
+            } else {
+                completed = completeMissingEntries(json);
+                if (configVersion < CONFIG_VERSION) {
+                    json.addProperty("config_version", CONFIG_VERSION);
+                    pendingComplete = json;
+                    pendingCompleted = completed;
+                    pendingOldVersion = configVersion;   // 先记下文件里的旧版本号
+                    configVersion = CONFIG_VERSION;      // 内存里也同步，/hy status 显示的才是实际生效版本
+                } else if (!completed.isEmpty()) {
+                    pendingComplete = json;
+                    pendingCompleted = completed;
+                    pendingOldVersion = configVersion;
+                }
+            }
+
             System.out.println("[HyAuth] 配置重载完成（JSON 配置加载成功），当前 LittleSkin 白名单人数: "
                     + whitelist.size() + "，离线名单人数: " + offlinePlayers.size() + "，API: " + apiRoot);
             System.out.println("[HyAuth] 管理员命令: /" + getPrimaryCommandRoot() + " …（另有 "
@@ -591,7 +797,33 @@ public final class ListManager {
         } catch (Exception e) {
             System.err.println("[HyAuth] 读取配置文件失败，请检查 JSON 格式: " + e.getMessage());
         }
+
+        // 写回自动补齐的配置项：此时读取器已关闭，Windows 上才能替换文件
+        JsonObject toComplete = pendingComplete;
+        List<String> completedNow = pendingCompleted;
+        int oldVersion = pendingOldVersion;
+        pendingComplete = null;
+        pendingCompleted = null;
+        if (toComplete != null && completedNow != null) {
+            try {
+                writeConfigFile(toComplete);
+                String upgraded = oldVersion < CONFIG_VERSION
+                        ? "配置版本 v" + oldVersion + " → v" + CONFIG_VERSION + "，" : "";
+                System.out.println("[HyAuth] " + upgraded + "已自动补齐 " + completedNow.size()
+                        + " 个新版新增项（填的是默认值，可直接在文件里改）：" + completedNow);
+                System.out.println("[HyAuth] 原有的账号信息（littleskin_players / offline_players）与已有配置值均原样保留。");
+            } catch (Throwable t) {
+                System.err.println("[HyAuth] 自动补齐配置项写回失败（内存里仍按默认值生效）: " + t);
+            }
+        }
     }
+
+    /** 待写回的"补齐后的配置"（因为要等读取器关闭，见 reload()）。 */
+    private static JsonObject pendingComplete;
+
+    private static List<String> pendingCompleted;
+
+    private static int pendingOldVersion;
 
     /** 判断玩家是否在 LittleSkin 名单内（忽略大小写）。 */
     public static boolean isLittleSkinPlayer(String username) {
@@ -718,6 +950,11 @@ public final class ListManager {
     /** 当前 LittleSkin 外置名单（只读，名字为小写存储形式）。 */
     public static Set<String> getLittleSkinPlayers() {
         return whitelist;
+    }
+
+    /** 配置文件里声明的版本（老配置没有该字段时为 0）。 */
+    public static int getConfigVersion() {
+        return configVersion;
     }
 
     /** 当前离线名单（只读，小写名字 → 条目）。 */

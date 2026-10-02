@@ -224,15 +224,15 @@ public class LagAdviceMain {
         check(Boolean.TRUE.equals(sourceType.getMethod("said", String.class).invoke(null, "version=7")),
                 "回显里写明了 UUID 版本与生成时间");
 
-        // 名字已有身份（usercache.json 里的 ConflictGuy）→ 必须拦下
+        // 名字已有身份（usercache.json 里的 ConflictGuy）→ 默认沿用，不换人
         sourceType.getMethod("reset").invoke(null);
         commandsType.getMethod("performPrefixedCommand", sourceType, String.class)
                 .invoke(commands, console, "/hy off ConflictGuy");
         String afterRefuse = read("littleskin_config.json");
-        check(!afterRefuse.contains("ConflictGuy"),
-                "名字在 usercache.json 里已有身份时：默认不发新 UUID、不写配置（防止换人丢存档）");
-        check(Boolean.TRUE.equals(sourceType.getMethod("said", String.class).invoke(null, "已拦下")),
-                "并且明确告知被拦下的原因与已有 UUID"
+        check(afterRefuse.contains("ConflictGuy") && afterRefuse.contains(CONFLICT_UUID),
+                "名字在 usercache.json 里已有身份时：默认沿用它（把旧 UUID 写进离线名单，保住背包/成就）");
+        check(said(sourceType, "已沿用这个 UUID"),
+                "并明确说明是在沿用、以及身份的来源"
                         + sourceType.getMethod("tail", int.class).invoke(null, 3));
 
         // whois 查户口（此时这个名字只在 usercache.json 里，还没进过配置）
@@ -244,21 +244,15 @@ public class LagAdviceMain {
         check(Boolean.TRUE.equals(sourceType.getMethod("said", String.class).invoke(null, "原版离线算法")),
                 "「/hy whois」同时给出原版离线算法会算出的 UUID（老存档最容易挂在这个 UUID 上）");
 
-        // 显式沿用旧 UUID
-        sourceType.getMethod("reset").invoke(null);
-        commandsType.getMethod("performPrefixedCommand", sourceType, String.class)
-                .invoke(commands, console, "/hy off ConflictGuy " + CONFLICT_UUID);
-        String afterAdopt = read("littleskin_config.json");
-        check(afterAdopt.contains(CONFLICT_UUID),
-                "「/hy off ConflictGuy <旧UUID>」把它的 UUID 改成指定的这个（沿用原始身份）");
-
-        // 换新 UUIDv7（force）
+        // 换新身份：/hy off <名字> force（唯一会"换人"的形式）
         sourceType.getMethod("reset").invoke(null);
         run(commandsType, sourceType, commands, console, "/hy off ConflictGuy force");
         String afterForce = read("littleskin_config.json");
         String forcedUuid = firstUuidFor(afterForce, "ConflictGuy");
         check(forcedUuid != null && !CONFLICT_UUID.equalsIgnoreCase(forcedUuid) && forcedUuid.charAt(14) == '7',
                 "「/hy off ConflictGuy force」换了一个新的 UUIDv7（原 " + CONFLICT_UUID + " → " + forcedUuid + "）");
+        check(said(sourceType, "老存档的背包/成就/统计仍挂在旧 UUID 下"),
+                "并明确警告换身份会丢开老存档的归属");
 
         // 外置名单（add 必须说明加哪种：ex = 外置 / off = 离线）
         sourceType.getMethod("reset").invoke(null);
@@ -269,13 +263,13 @@ public class LagAdviceMain {
         run(commandsType, sourceType, commands, console, "/hy add Steve");
         check(said(sourceType, "要说明加哪一种"), "「/hy add 名字」不说明类型时给出提示（不会猜错名单）");
 
-        // 6b) 批量 + 类型 + 沿用原始 UUID
+        // 6b) 批量 + 类型
         sourceType.getMethod("reset").invoke(null);
         run(commandsType, sourceType, commands, console, "/hy add ex BatchA BatchB");
         String afterBatchAdd = read("littleskin_config.json");
         check(afterBatchAdd.contains("BatchA") && afterBatchAdd.contains("BatchB"),
                 "「/hy add ex A B」一次加多个外置名字");
-        check(said(sourceType, "批量结果"), "批量操作给出汇总（成功/失败/被拦下各几个）");
+        check(said(sourceType, "批量结果"), "批量操作给出汇总（成功/失败各几个）");
         run(commandsType, sourceType, commands, console, "/hy del BatchA BatchB");
         String afterBatchDel = read("littleskin_config.json");
         check(!afterBatchDel.contains("BatchA") && !afterBatchDel.contains("BatchB"), "「/hy del A B」按名字批量删除");
@@ -283,11 +277,7 @@ public class LagAdviceMain {
         run(commandsType, sourceType, commands, console, "/hy add off Off1 Off2");
         String afterBatchOff = read("littleskin_config.json");
         check(afterBatchOff.contains("Off1") && afterBatchOff.contains("Off2"),
-                "「/hy add off A B」批量加入离线名单（每个都独立查重）");
-        sourceType.getMethod("reset").invoke(null);
-        run(commandsType, sourceType, commands, console, "/hy add off AdoptGuy " + CONFLICT_UUID);
-        check(read("littleskin_config.json").contains("AdoptGuy"),
-                "「/hy add off 名字 <uuid>」沿用这条原始记录的 名字+UUID");
+                "「/hy add off A B」批量加入离线名单（各自查重后发 UUIDv7）");
         sourceType.getMethod("reset").invoke(null);
         run(commandsType, sourceType, commands, console, "/hy ls");
         check(said(sourceType, "LittleSkin 外置名单") && said(sourceType, "离线名单"),
@@ -547,6 +537,23 @@ public class LagAdviceMain {
         check(said(sourceType, "开始区块卡顿勘探：采样 1 秒"),
                 "「/lag 1」带数字＝采样 1 秒（= lag scan 1）");
 
+        // 13) 配置版本校对 + 自动补齐（升级后第一次加载：补默认项、盖新版本号、账号信息原样保留）
+        writeOldStyleConfig();
+        listManager.getMethod("reload").invoke(null);
+        String completed = read("littleskin_config.json");
+        check(completed.contains("\"config_version\": 4"),
+                "老配置（没有 config_version）加载后被盖上当前配置版本号 v4");
+        check(completed.contains("\"chunk_lag\"") && completed.contains("\"commands\"") && completed.contains("\"clear\""),
+                "同时把三块新版配置（chunk_lag / commands / clear）按默认值补写进文件");
+        check(completed.contains("break_bedrock") && completed.contains("interval_ticks") && completed.contains("roots"),
+                "补齐的是具体可调项（clear.* / commands.*），管理员打开文件就能看到有哪些能调");
+        check(completed.contains("OldGuy") && completed.contains("OldOff") && completed.contains(CONFLICT_UUID),
+                "账号信息原样保留：已有的外置名字、离线条目与它的 UUID 都没被动过");
+        check(Integer.valueOf(4).equals(listManager.getMethod("getConfigVersion").invoke(null)),
+                "内存里的配置版本也同步成 v4（/hy status 会显示）");
+        writeConfig(true);
+        listManager.getMethod("reload").invoke(null);
+
         System.out.println();
         System.out.println(failures == 0 ? "[lag] 全部通过" : "[lag] 失败项: " + failures);
         System.exit(failures == 0 ? 0 : 1);
@@ -775,15 +782,38 @@ public class LagAdviceMain {
     }
 
     /** 写测试配置：命令根 hy/lag、判据 1ms 或中位数 6 倍、常驻开启、空置域挖掘参数。 */
+    /** 老版本风格的配置文件：只有最老的那几个字段（用来验证版本校对 + 自动补齐）。 */
+    private static void writeOldStyleConfig() throws Exception {
+        String json = "{\n"
+                + "  \"littleskin_players\": [ \"OldGuy\" ],\n"
+                + "  \"offline_players\": [ { \"name\": \"OldOff\", \"uuid\": \"" + CONFLICT_UUID + "\" } ],\n"
+                + "  \"api_root\": \"http://127.0.0.1:25588/api/yggdrasil\",\n"
+                + "  \"debug\": true\n"
+                + "}\n";
+        try (Writer writer = new OutputStreamWriter(new FileOutputStream("littleskin_config.json"),
+                StandardCharsets.UTF_8)) {
+            writer.write(json);
+        }
+    }
+
     private static void writeConfig(boolean breakBedrock) throws Exception {
         String json = "{\n"
+                + "  \"config_version\": 4,\n"
                 + "  \"description\": \"lag 自检配置\",\n"
                 + "  \"littleskin_players\": [],\n"
                 + "  \"offline_players\": [],\n"
                 + "  \"api_root\": \"http://127.0.0.1:25588/api/yggdrasil\",\n"
+                + "  \"public_key\": \"\",\n"
+                + "  \"connect_timeout_ms\": 5000,\n"
+                + "  \"read_timeout_ms\": 5000,\n"
+                + "  \"relax_chat_keys\": true,\n"
+                + "  \"chat_key_strict\": false,\n"
+                + "  \"bypass_signed_commands\": true,\n"
+                + "  \"offline_chat_exempt\": true,\n"
                 + "  \"debug\": true,\n"
                 + "  \"chunk_lag\": {\n"
                 + "    \"resident\": true,\n"
+                + "    \"ewma_alpha\": 0.05,\n"
                 + "    \"flag_threshold_ms\": 1.0,\n"
                 + "    \"flag_relative_factor\": 6.0,\n"
                 + "    \"scan_default_seconds\": 30,\n"
