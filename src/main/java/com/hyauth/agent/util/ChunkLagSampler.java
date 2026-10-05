@@ -132,10 +132,20 @@ public final class ChunkLagSampler {
                 current.markBlockEntitiesNested();
             }
         }
+        if (!ListManager.isLagBlockEntityHook()) {
+            return 0L;   // 开关关掉：不测方块实体，开销归零（卡顿时用它先排除这一项）
+        }
         return System.nanoTime();
     }
 
-    /** 退出 {@code LevelChunk#tickBlockEntities}（维度从区块自身解析，切面不用带 level 参数）。 */
+    /** 退出 {@code LevelChunk#tickBlockEntities}'@)
+$c = $c.Replace('    public static long beginBlockEntityTick() {
+        if (insideChunkTick > 0) {', @'
+    public static long beginBlockEntityTick() {
+        if (!ListManager.isLagBlockEntityHook()) {
+            return 0L;
+        }
+        if (insideChunkTick > 0) {（维度从区块自身解析，切面不用带 level 参数）。 */
     public static void endBlockEntityTick(long startNanos, Object chunk) {
         if (startNanos == 0L || !sampling()) {
             return;

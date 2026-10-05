@@ -403,6 +403,7 @@ public final class ListManager {
         JsonObject chunkLag = ensureObject(json, "chunk_lag", added);
         if (chunkLag != null) {
             ensureBool(chunkLag, "resident", true, added, "chunk_lag.");
+            ensureBool(chunkLag, "block_entity_hook", true, added, "chunk_lag.");
             ensureNumber(chunkLag, "ewma_alpha", 0.05D, added, "chunk_lag.");
             ensureNumber(chunkLag, "flag_threshold_ms", 1.0D, added, "chunk_lag.");
             ensureNumber(chunkLag, "flag_relative_factor", 6.0D, added, "chunk_lag.");
@@ -720,6 +721,9 @@ public final class ListManager {
             // 区块卡顿勘探
             JsonObject chunkLag = json.has("chunk_lag") && !json.get("chunk_lag").isJsonNull()
                     && json.get("chunk_lag").isJsonObject() ? json.getAsJsonObject("chunk_lag") : null;
+            lagBlockEntityHook = chunkLag == null || !chunkLag.has("block_entity_hook")
+                    || chunkLag.get("block_entity_hook").isJsonNull()
+                    || chunkLag.get("block_entity_hook").getAsBoolean();
             lagResident = chunkLag == null || !chunkLag.has("resident") || chunkLag.get("resident").isJsonNull()
                     || chunkLag.get("resident").getAsBoolean();
             lagEwmaAlpha = clampDouble(optDouble(chunkLag, "ewma_alpha", 0.05D), 0.001D, 1.0D);
@@ -1026,6 +1030,11 @@ public final class ListManager {
     // ------------------------------------------------------------------
 
     /** 常驻采样是否开启（见 {@link #lagResident}）。 */
+    /** 方块实体 ticker 计时是否开启。 */
+    public static boolean isLagBlockEntityHook() {
+        return lagBlockEntityHook;
+    }
+
     public static boolean isLagResident() {
         return lagResident;
     }
@@ -1119,6 +1128,9 @@ public final class ListManager {
 
     /** 额外信任的管理员（名字或 UUID，不区分大小写）：解决"我是管理员但当前登录身份没被 op"。 */
     private static volatile Set<String> extraAdmins = Collections.emptySet();
+
+    /** 方块实体 ticker 计时开关（默认开）。方块实体多的基地上它是最贵的一项，卡顿时可先关掉它验证。 */
+    private static volatile boolean lagBlockEntityHook = true;
 
     /** 配置文件里声明的版本（老配置没有该字段时为 0）。 */
     public static int getConfigVersion() {
